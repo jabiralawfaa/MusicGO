@@ -14,6 +14,13 @@ let songs = [
     audio: "JourneyToTheWest-Sun_Go_kong",
   },
   {
+    name: "Lunar New Year - Rabbit",
+    artist: "Timi Audio",
+    img: "DIAOCHAN",
+    coverImg: "DIAOCHAN",
+    audio: "DIAOCHAN",
+  },
+  {
     name: "Lunar New Year - Dragon",
     artist: "Timi Audio",
     img: "LNYDragon",
