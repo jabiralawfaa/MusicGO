@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <title>Music Application</title>
+  </head>
+
+  <body>
+    <video class="bgImg" autoplay loop muted>
+      <source src="videos/wallpaper3.mp4" type="video/mp4" />
+      Maaf, browser Anda tidak mendukung tag video.
+    </video>
+    <div class="content">
+      <div class="top-bar">
+        <span class="material-symbols-rounded" style="color: white">expand_more</span>
+        <span style="color: white">Now Playing</span>
+        <span class="material-symbols-rounded" style="color: white">more_horiz</span>
+      </div>
+      <div class="image-wrapper">
+        <div class="music-image">
+          <img src="images/img1.jpg" alt="Album cover" />
+        </div>
+      </div>
+      <div class="music-titles">
+        <p class="name">6 Shots - NEFFEX</p>
+        <p class="artist">NEFFEX</p>
+      </div>
+      <div class="progress-details">
+        <div class="progress-bar">
+          <span></span>
+        </div>
+        <div class="time">
+          <span class="current">0:00</span>
+          <span class="final">5:30</span>
+        </div>
+      </div>
+
+      <div class="control-btn">
+        <span class="material-symbols-rounded" id="repeat">repeat</span>
+        <span class="material-symbols-rounded" id="prev">skip_previous</span>
+        <div class="play-pause">
+          <span class="material-symbols-rounded">play_arrow</span>
+        </div>
+        <span class="material-symbols-rounded" id="next">skip_next</span>
+        <span class="material-symbols-rounded" id="shuffle">shuffle</span>
+      </div>
+
+      <!-- Tambahkan kontrol volume di sini -->
+      <div class="volume-control">
+        <span class="material-symbols-rounded" id="volume-icon">volume_up</span>
+        <input type="range" id="volume-slider" min="0" max="100" value="100" />
+      </div>
+      <div class="playlist-control">
+        <span class="material-symbols-rounded" id="playlist-icon" style="color: white">playlist_play</span>
+        <select id="playlist" onchange="changePlaylist()">
+          <option value="index2.html">Playlist Orchestral</option>
+          <option value="index1.html">Playlist Japanese</option>
+          <option value="index.html">Playlist DJ</option>
+        </select>
+      </div>
+
+      <audio src="music/music1.mp3" class="main-song"></audio>
+    </div>
+
+    <script src="js/playlist2.js"></script>
+    <script src="js/script.js"></script>
+    <script>
+      function changePlaylist() {
+        var playlist = document.getElementById("playlist");
+        var selectedValue = playlist.value;
+        window.location.href = selectedValue;
+      }
+    </script>
+  </body>
+</html>
