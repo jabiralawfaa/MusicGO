@@ -41,4 +41,11 @@ let songs = [
     coverImg: "hoshino",
     audio: "IDOL",
   },
+  {
+    name: "Akuma No Ko",
+    artist: "Ai Higuchi",
+    img: "AKUMANOKO",
+    coverImg: "AKUMANOKO",
+    audio: "special_AKUMANOKO",
+  },
 ];
