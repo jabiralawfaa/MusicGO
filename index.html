@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="MusicGO — local-first music player with a live audio visualizer, video backgrounds and playlists. Works fully offline."
+    />
+    <meta name="theme-color" content="#0E0F3D" />
+    <title>MusicGO — Local Audio Player</title>
+    <link rel="icon" href="images/img1.jpg" type="image/jpeg" />
+    <link rel="stylesheet" href="style.css" />
+    <script>
+      /* set the theme before first paint so there is no flash */
+      try {
+        var savedTheme = localStorage.getItem("musicgo-theme");
+        document.documentElement.setAttribute(
+          "data-theme",
+          savedTheme === "light" ? "light" : "dark"
+        );
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    </script>
+  </head>
+
+  <body>
+    <!--
+      THESIS: the audio is the hero — a live spectrum visualizer replaces the
+      CDN waveform, played over the site's video background.
+      OWN-WORLD: deep indigo glass cards on a moving video scrim, teal accent,
+      Fraunces display + Inter UI; every font, icon and script is local (no CDN).
+      STORY: land, pick a playlist tab, press space, watch the spectrum react —
+      offline from file:// or on GitHub Pages.
+      FIRST VIEWPORT: header (brand, Now Playing badge, background-video and
+      theme toggles) → left album card with progress ring → right visualizer,
+      transport, volume → queue with playlist tabs.
+      FORM: brief-pinned design from .example/contoh-tampilan-music-player.html
+      (seed: pinned-by-brief, no roll).
+      FINISH: unreviewed and undocumented is unfinished; this build ends with
+      the finish review, the verdict, and DESIGN.md.
+    -->
+
+    <div class="bg-stage" id="bg-stage" aria-hidden="true">
+      <video class="bg-video" id="bg-video" autoplay loop muted playsinline preload="auto">
+        <source id="bg-source" src="videos/wallpaper1.mp4" type="video/mp4" />
+        Sorry, your browser does not support background video.
+      </video>
+      <div class="bg-scrim"></div>
+    </div>
+
+    <div class="app">
+      <header class="topbar reveal" style="--d: 0.05s">
+        <div class="brand">
+          <span class="brand-mark" data-icon="disc-3"></span>
+          <span>
+            <h1 class="brand-name">MusicGO</h1>
+            <span class="brand-sub">Local Audio Player</span>
+          </span>
+        </div>
+
+        <div class="topbar-actions">
+          <div class="np-badge is-hidden" id="np-badge">
+            <span class="eq-bars"><span></span><span></span><span></span></span>
+            <span>Now Playing</span>
+          </div>
+          <button
+            type="button"
+            class="icon-btn"
+            id="upload-btn"
+            data-icon="upload"
+            aria-label="Upload a song"
+            title="Upload song"
+            hidden
+          ></button>
+          <button
+            type="button"
+            class="icon-btn"
+            id="help-btn"
+            data-icon="keyboard"
+            aria-label="Keyboard shortcuts"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            aria-keyshortcuts="?"
+            title="Keyboard shortcuts (?)"
+          ></button>
+          <button
+            type="button"
+            class="icon-btn"
+            id="bg-toggle"
+            data-icon="video"
+            aria-label="Toggle background video"
+            aria-pressed="true"
+            title="Background video"
+          ></button>
+          <button
+            type="button"
+            class="icon-btn"
+            id="theme-toggle"
+            data-icon="moon"
+            aria-label="Toggle colour theme"
+            title="Theme"
+          ></button>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="card album-card reveal" style="--d: 0.14s" aria-label="Now playing">
+          <div class="album-wrap">
+            <svg class="progress-ring" viewBox="0 0 100 100" aria-hidden="true">
+              <circle class="ring-track" cx="50" cy="50" r="49"></circle>
+              <circle
+                class="ring-fill"
+                id="progress-circle"
+                cx="50"
+                cy="50"
+                r="49"
+                stroke-dasharray="307.9"
+                stroke-dashoffset="307.9"
+              ></circle>
+            </svg>
+            <div class="album-stage" id="album-stage">
+              <img id="album-art" src="images/img1.jpg" alt="Album cover" />
+            </div>
+          </div>
+
+          <div class="track-meta">
+            <div class="track-badges">
+              <span class="pill" id="track-number">Track 01</span>
+              <span class="track-of" id="track-of">of 5</span>
+            </div>
+            <h2 class="track-title" id="track-title">—</h2>
+            <p class="track-artist" id="track-artist">—</p>
+          </div>
+        </section>
+
+        <section class="side">
+          <div class="card player-card reveal" style="--d: 0.22s">
+            <div class="viz-head">
+              <span class="viz-label"><span class="dot"></span>Visualizer<span class="viz-chip" id="viz-chip" hidden>preview</span></span>
+              <span class="time">
+                <span id="current-time">0:00</span>
+                <span class="sep">/</span>
+                <span id="total-time">0:00</span>
+              </span>
+            </div>
+
+            <div class="viz-box">
+              <canvas id="visualizer" aria-hidden="true"></canvas>
+            </div>
+
+            <div
+              class="seek"
+              id="seek"
+              role="slider"
+              tabindex="0"
+              aria-label="Seek position"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+            >
+              <div class="seek-track">
+                <div class="seek-fill" id="seek-fill"></div>
+                <span class="seek-thumb" id="seek-thumb"></span>
+              </div>
+            </div>
+
+            <div class="controls">
+              <div class="ctrl-cluster">
+                <button
+                  type="button"
+                  class="icon-btn plain"
+                  id="shuffle-btn"
+                  data-icon="shuffle"
+                  aria-label="Shuffle"
+                  aria-pressed="false"
+                  aria-keyshortcuts="S"
+                  title="Shuffle (S)"
+                ></button>
+              </div>
+
+              <button
+                type="button"
+                class="icon-btn transport"
+                id="prev-btn"
+                data-icon="skip-back"
+                aria-label="Previous track"
+                aria-keyshortcuts="ArrowLeft"
+                title="Previous (←)"
+              ></button>
+
+              <button
+                type="button"
+                class="play-btn"
+                id="play-btn"
+                data-icon="play"
+                aria-label="Play"
+                aria-keyshortcuts="Space"
+                title="Play / Pause (Space)"
+              ></button>
+
+              <button
+                type="button"
+                class="icon-btn transport"
+                id="next-btn"
+                data-icon="skip-forward"
+                aria-label="Next track"
+                aria-keyshortcuts="ArrowRight"
+                title="Next (→)"
+              ></button>
+
+              <div class="ctrl-cluster">
+                <button
+                  type="button"
+                  class="icon-btn plain"
+                  id="repeat-btn"
+                  data-icon="repeat"
+                  aria-label="Repeat off"
+                  aria-pressed="false"
+                  aria-keyshortcuts="R"
+                  title="Repeat (R)"
+                ></button>
+              </div>
+            </div>
+
+            <div class="volume">
+              <button
+                type="button"
+                class="icon-btn sm plain"
+                id="mute-btn"
+                data-icon="volume-2"
+                aria-label="Mute"
+                aria-keyshortcuts="M"
+                title="Mute (M)"
+              ></button>
+              <input
+                type="range"
+                id="volume"
+                min="0"
+                max="100"
+                value="80"
+                aria-label="Volume"
+                style="--val: 80%"
+              />
+              <span class="vol-value" id="volume-value">80</span>
+            </div>
+          </div>
+
+          <div class="card queue-card reveal" style="--d: 0.3s">
+            <div class="queue-head">
+              <span class="queue-title"><span data-icon="list-music"></span>Queue</span>
+              <span class="queue-count"><span id="track-count">0</span> tracks</span>
+            </div>
+
+            <div class="tabs" id="playlist-tabs" aria-label="Choose a playlist"></div>
+
+            <ol class="queue-list" id="queue-list"></ol>
+
+            <p class="queue-empty" id="queue-empty" hidden>
+              <span data-icon="music"></span>This playlist is empty
+            </p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer reveal" style="--d: 0.38s">
+        <p>MusicGO · no CDN, plays fully offline</p>
+        <div class="hints">
+          <span class="hint"><kbd>Space</kbd> Play / Pause</span>
+          <span class="hint"><kbd>&larr;</kbd><kbd>&rarr;</kbd> Switch track</span>
+          <span class="hint"><kbd>M</kbd> Mute</span>
+        </div>
+      </footer>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <div class="modal-backdrop" id="upload-modal" hidden>
+      <form class="modal" id="upload-form" aria-label="Upload a song">
+        <div class="modal-head">
+          <h2 class="modal-title">Upload song</h2>
+          <button
+            type="button"
+            class="icon-btn"
+            id="upload-close"
+            data-icon="x"
+            aria-label="Close upload"
+            title="Close"
+          ></button>
+        </div>
+
+        <label class="field">
+          <span class="field-label">Song file</span>
+          <input type="file" id="up-audio" name="audio" accept="audio/*" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Title</span>
+          <input type="text" id="up-title" name="title" maxlength="80" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Artist</span>
+          <input type="text" id="up-artist" name="artist" maxlength="80" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Thumbnail <em>(optional)</em></span>
+          <input type="file" id="up-thumb" name="thumb" accept="image/*" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Playlist</span>
+          <select id="up-playlist" name="playlist"></select>
+        </label>
+
+        <div class="field" id="up-new-wrap" hidden>
+          <label class="field">
+            <span class="field-label">New playlist name</span>
+            <input type="text" id="up-new-name" name="newName" maxlength="40" />
+          </label>
+        </div>
+
+        <p class="form-error" id="up-error" hidden></p>
+        <p class="form-note">Local mode only — files stay in this browser.</p>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="upload-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="upload-submit">Upload</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="modal-backdrop" id="help-modal" hidden>
+      <div
+        class="modal modal-help"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="help-title"
+      >
+        <div class="modal-head">
+          <h2 class="modal-title" id="help-title">Keyboard shortcuts</h2>
+          <button
+            type="button"
+            class="icon-btn"
+            id="help-close"
+            data-icon="x"
+            aria-label="Close keyboard shortcuts"
+            title="Close"
+          ></button>
+        </div>
+
+        <ul class="kbd-list">
+          <li>
+            <span class="keys"><kbd>Space</kbd></span>
+            <span class="action">Play / Pause</span>
+          </li>
+          <li>
+            <span class="keys"><kbd>&larr;</kbd><kbd>&rarr;</kbd></span>
+            <span class="action">Previous / Next track</span>
+          </li>
+          <li>
+            <span class="keys"><kbd>Shift</kbd><span class="kbd-plus">+</span><kbd>&larr;</kbd></span>
+            <span class="action">Seek 5s back</span>
+          </li>
+          <li>
+            <span class="keys"><kbd>Shift</kbd><span class="kbd-plus">+</span><kbd>&rarr;</kbd></span>
+            <span class="action">Seek 5s forward</span>
+          </li>
+          <li>
+            <span class="keys"><kbd>&uarr;</kbd><kbd>&darr;</kbd></span>
+            <span class="action">Volume up / down</span>
+          </li>
+          <li>
+            <span class="keys"><kbd>M</kbd></span>
+            <span class="action">Mute</span>
+          </li>
+          <li>
+            <span class="keys"><kbd>S</kbd></span>
+            <span class="action">Shuffle on / off</span>
+          </li>
+          <li>
+            <span class="keys"><kbd>R</kbd></span>
+            <span class="action">Repeat mode cycle</span>
+          </li>
+          <li>
+            <span class="keys"><kbd>?</kbd></span>
+            <span class="action">Show / hide this guide</span>
+          </li>
+          <li>
+            <span class="keys"><kbd>Esc</kbd></span>
+            <span class="action">Close dialog</span>
+          </li>
+        </ul>
+
+        <p class="form-note">Shortcuts pause while you are typing in a field.</p>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" id="help-ok">Got it</button>
+        </div>
+      </div>
+    </div>
+
+    <audio class="main-song" id="audio" preload="auto"></audio>
+
+    <script src="js/playlists.js"></script>
+    <script src="js/icons.js"></script>
+    <script src="js/uploads.js"></script>
+    <script src="js/script.js"></script>
+  </body>
+</html>
