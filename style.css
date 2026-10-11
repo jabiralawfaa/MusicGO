@@ -1329,6 +1329,28 @@ kbd {
     font-size: clamp(1.5rem, 6vw, 2rem);
   }
 
+  body.is-minimized .topbar {
+    gap: 8px;
+  }
+
+  body.is-minimized .brand-name {
+    display: none;
+  }
+
+  body.is-minimized .topbar-actions {
+    gap: 4px;
+  }
+
+  body.is-minimized .topbar-actions .icon-btn {
+    width: 34px;
+    height: 34px;
+  }
+
+  body.is-minimized .topbar-actions .icon-btn svg {
+    width: 15px;
+    height: 15px;
+  }
+
   .footer {
     justify-content: center;
     text-align: center;
@@ -1703,6 +1725,136 @@ body.is-minimized .app {
   visibility: hidden;
 }
 
+/* --------------------------------------------- minimized karaoke lyrics */
+
+#lyrics-align-btn,
+#lyrics-size-dec,
+#lyrics-size-inc {
+  display: none;
+}
+
+body.is-minimized #lyrics-align-btn,
+body.is-minimized #lyrics-size-dec,
+body.is-minimized #lyrics-size-inc {
+  display: inline-grid;
+}
+
+.lyrics-overlay {
+  position: fixed;
+  top: 80px;
+  bottom: 96px;
+  left: 0;
+  right: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.2s ease;
+}
+
+.lyrics-lines {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  max-width: 46ch;
+}
+
+.lyrics-lines:not(.is-static) {
+  background: radial-gradient(
+    ellipse 240px 120px at 50% 50%,
+    rgba(0, 0, 0, 0.42) 0%,
+    rgba(0, 0, 0, 0.18) 55%,
+    rgba(0, 0, 0, 0) 78%
+  );
+}
+
+.lyrics-overlay[data-align="left"] .lyrics-lines {
+  text-align: left;
+  margin-left: 6vw;
+  margin-right: auto;
+}
+
+.lyrics-overlay[data-align="center"] .lyrics-lines {
+  text-align: center;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.lyrics-overlay[data-align="right"] .lyrics-lines {
+  text-align: right;
+  margin-left: auto;
+  margin-right: 6vw;
+}
+
+.lyric-line {
+  font-family: var(--font-ui);
+  font-size: var(--lyrics-size, 20px);
+  font-weight: 500;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.42);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.55), 0 0 2px rgba(0, 0, 0, 0.4);
+}
+
+.lyric-line.is-dim {
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.lyric-line.is-active {
+  color: #fff;
+  font-weight: 650;
+}
+
+.lyrics-lines.is-static {
+  justify-content: flex-start;
+  overflow-y: auto;
+  scrollbar-width: none;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  background: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0) 0%,
+    rgba(0, 0, 0, 0.4) 24%,
+    rgba(0, 0, 0, 0.4) 76%,
+    rgba(0, 0, 0, 0) 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    transparent 0,
+    #000 48px,
+    #000 calc(100% - 48px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    180deg,
+    transparent 0,
+    #000 48px,
+    #000 calc(100% - 48px),
+    transparent 100%
+  );
+}
+
+.lyrics-lines.is-static::-webkit-scrollbar {
+  display: none;
+}
+
+.lyrics-lines.is-static .lyric-line {
+  color: #fff;
+}
+
+@media (max-width: 768px) {
+  .lyrics-overlay {
+    top: 70px;
+    bottom: 120px;
+  }
+
+  .lyric-line {
+    font-size: calc(var(--lyrics-size, 20px) * 0.8);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .reveal {
     animation: none;
@@ -1728,7 +1880,8 @@ body.is-minimized .app {
   .mini-seek-fill,
   .mini-btn,
   .mini-play,
-  .cover-choice {
+  .cover-choice,
+  .lyrics-overlay {
     transition: none;
   }
 }

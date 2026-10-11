@@ -67,6 +67,7 @@
       src: global.URL.createObjectURL(record.audioBlob),
       thumb: record.thumbBlob ? global.URL.createObjectURL(record.thumbBlob) : null,
       uploadId: record.id,
+      lyrics: record.lyrics || null,
     };
   }
 
@@ -119,7 +120,7 @@
   }
 
   /* Persist one uploaded song (+ its playlist def when created).
-     entry: { title, artist, playlistId, playlistLabel, isNewPlaylist, audioBlob, thumbBlob }
+     entry: { title, artist, playlistId, playlistLabel, isNewPlaylist, audioBlob, thumbBlob, lyrics }
      Returns Promise<record> (record.id / record.title / record.artist / blobs). */
   function save(entry) {
     var record = {
@@ -129,6 +130,7 @@
       playlistId: entry.playlistId,
       audioBlob: entry.audioBlob,
       thumbBlob: entry.thumbBlob || null,
+      lyrics: entry.lyrics || null,
       addedAt: Date.now(),
     };
 
@@ -224,7 +226,7 @@
     }
   }
 
-  function parseCover(buf) {
+  function parseTag(buf) {
     var bytes = new Uint8Array(buf);
     if (bytes.length < 10) return null;
     if (bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33) return null;
@@ -262,70 +264,273 @@
       pos = extSize;
       if (pos >= body.length) return null;
     }
+    var frames = [];
     while (pos + 10 <= body.length) {
       var id = latin1(body, pos, pos + 4);
       var fsize = major === 4 ? syncSafe(body[pos + 4], body[pos + 5], body[pos + 6], body[pos + 7]) : uint32BE(body, pos + 4);
       if (body[pos] === 0 || fsize === 0) break;
       if (pos + 10 + fsize > body.length) break;
-      if (id === "APIC") {
-        var blob = parseApic(body.subarray(pos + 10, pos + 10 + fsize));
+      frames.push({ id: id, data: body.subarray(pos + 10, pos + 10 + fsize) });
+      pos += 10 + fsize;
+    }
+    return { major: major, frames: frames };
+  }
+
+  function parseCover(buf) {
+    var tag = parseTag(buf);
+    if (!tag) return null;
+    for (var i = 0; i < tag.frames.length; i++) {
+      if (tag.frames[i].id === "APIC") {
+        var blob = parseApic(tag.frames[i].data);
         if (blob) return blob;
       }
-      pos += 10 + fsize;
     }
     return null;
   }
 
-  /* Detect embedded ID3v2 cover art (APIC) in an MP3 file.
-     Returns Promise<Blob|null> — never rejects. */
-  function extractCover(file) {
-    return new Promise(function (resolve) {
-      function done(value) {
-        resolve(value);
+  function findTerminator(payload, from, enc) {
+    var wide = enc === 1 || enc === 2;
+    var j = from;
+    if (wide) {
+      while (j + 1 < payload.length) {
+        if (payload[j] === 0x00 && payload[j + 1] === 0x00 && (j - from) % 2 === 0) return j;
+        j++;
       }
+      return -1;
+    }
+    while (j < payload.length) {
+      if (payload[j] === 0x00) return j;
+      j++;
+    }
+    return -1;
+  }
+
+  var WIN1252_EXTRA = {
+    128: 8364, 130: 8218, 131: 402, 132: 8222, 133: 8230, 134: 8224, 135: 8225,
+    136: 710, 137: 8240, 138: 352, 139: 8249, 140: 338, 142: 381, 145: 8216,
+    146: 8217, 147: 8220, 148: 8221, 149: 8226, 150: 8211, 151: 8212, 152: 732,
+    153: 8482, 154: 353, 155: 8250, 156: 339, 158: 382, 159: 376,
+  };
+
+  function manualDecode(data, label) {
+    var out = "";
+    var i, c, c2, c3, c4, v;
+    if (label === "utf-16le" || label === "utf-16be") {
+      var be = label === "utf-16be";
+      i = 0;
+      while (i + 1 < data.length) {
+        v = be ? (data[i] << 8) | data[i + 1] : data[i] | (data[i + 1] << 8);
+        i += 2;
+        if (v >= 0xd800 && v <= 0xdbff && i + 1 < data.length) {
+          var lo = be ? (data[i] << 8) | data[i + 1] : data[i] | (data[i + 1] << 8);
+          if (lo >= 0xdc00 && lo <= 0xdfff) {
+            out += String.fromCharCode(v, lo);
+            i += 2;
+            continue;
+          }
+        }
+        out += String.fromCharCode(v);
+      }
+      if (i < data.length) out += "�";
+      return out;
+    }
+    if (label === "utf-8") {
+      i = 0;
+      while (i < data.length) {
+        c = data[i++];
+        if (c < 0x80) out += String.fromCharCode(c);
+        else if (c >= 0xc2 && c <= 0xdf && i < data.length) {
+          c2 = data[i];
+          if ((c2 & 0xc0) === 0x80) {
+            out += String.fromCharCode(((c & 0x1f) << 6) | (c2 & 0x3f));
+            i++;
+          } else out += "�";
+        } else if (c >= 0xe0 && c <= 0xef && i + 1 < data.length) {
+          c2 = data[i];
+          c3 = data[i + 1];
+          if ((c2 & 0xc0) === 0x80 && (c3 & 0xc0) === 0x80) {
+            out += String.fromCharCode(((c & 0x0f) << 12) | ((c2 & 0x3f) << 6) | (c3 & 0x3f));
+            i += 2;
+          } else out += "�";
+        } else if (c >= 0xf0 && c <= 0xf4 && i + 2 < data.length) {
+          c2 = data[i];
+          c3 = data[i + 1];
+          c4 = data[i + 2];
+          if ((c2 & 0xc0) === 0x80 && (c3 & 0xc0) === 0x80 && (c4 & 0xc0) === 0x80) {
+            v = ((c & 0x07) << 18) | ((c2 & 0x3f) << 12) | ((c3 & 0x3f) << 6) | (c4 & 0x3f);
+            v -= 0x10000;
+            out += String.fromCharCode(0xd800 + (v >> 10), 0xdc00 + (v & 0x3ff));
+            i += 3;
+          } else out += "�";
+        } else out += "�";
+      }
+      return out;
+    }
+    for (i = 0; i < data.length; i++) {
+      c = data[i];
+      if (c < 128 || c >= 160) out += String.fromCharCode(c);
+      else if (WIN1252_EXTRA[c]) out += String.fromCharCode(WIN1252_EXTRA[c]);
+      else out += "�";
+    }
+    return out;
+  }
+
+  function decodeText(bytes, enc) {
+    if (!bytes || bytes.length === 0) return "";
+    var label;
+    var data = bytes;
+    if (enc === 3) label = "utf-8";
+    else if (enc === 2) label = "utf-16be";
+    else if (enc === 1) {
+      if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+        label = "utf-16le";
+        data = bytes.subarray(2);
+      } else if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+        label = "utf-16be";
+        data = bytes.subarray(2);
+      } else label = "utf-16le";
+    } else label = "windows-1252";
+    if (typeof TextDecoder !== "undefined") {
+      try {
+        return new TextDecoder(label).decode(data);
+      } catch (e) {}
+    }
+    try {
+      return manualDecode(data, label);
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function parseUslt(payload) {
+    if (!payload || payload.length < 4) return null;
+    var enc = payload[0];
+    var term = findTerminator(payload, 4, enc);
+    if (term === -1) return null;
+    var i = term + (enc === 1 || enc === 2 ? 2 : 1);
+    if (i > payload.length) return null;
+    return decodeText(payload.subarray(i), enc);
+  }
+
+  function parseSylt(payload) {
+    if (!payload || payload.length < 6) return null;
+    var enc = payload[0];
+    var tsFormat = payload[4];
+    var step = enc === 1 || enc === 2 ? 2 : 1;
+    var mult = tsFormat === 1 ? 40 : 1;
+    var i = 1 + 3 + 1 + 1;
+    var lines = [];
+    var total = 0;
+    while (i < payload.length) {
+      if (lines.length >= 800 || total >= 20000) break;
+      var term = findTerminator(payload, i, enc);
+      if (term === -1) break;
+      var text = decodeText(payload.subarray(i, term), enc);
+      i = term + step;
+      if (i + 4 > payload.length) break;
+      var stamp = uint32BE(payload, i);
+      i += 4;
+      var clean = text === null || text === undefined ? "" : String(text).replace(/^\uFEFF/, "").trim();
+      if (!clean) continue;
+      var room = 20000 - total;
+      if (room <= 0) break;
+      if (clean.length > room) clean = clean.slice(0, room);
+      if (!clean) break;
+      lines.push({ t: stamp * mult, text: clean });
+      total += clean.length;
+    }
+    if (!lines.length) return null;
+    lines.sort(function (a, b) {
+      return a.t - b.t;
+    });
+    return lines;
+  }
+
+  function sanitizeLyrics(s) {
+    if (s === null || s === undefined) return null;
+    var t = String(s).replace(/^\uFEFF/, "").trim();
+    t = t.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    t = t.replace(/\n{3,}/g, "\n\n");
+    if (t.length > 20000) t = t.slice(0, 20000);
+    t = t.trim();
+    return t ? t : null;
+  }
+
+  function buildLyrics(buf) {
+    var tag = parseTag(buf);
+    if (!tag) return null;
+    var i, k;
+    for (i = 0; i < tag.frames.length; i++) {
+      if (tag.frames[i].id === "SYLT") {
+        var timed = null;
+        try {
+          timed = parseSylt(tag.frames[i].data);
+        } catch (e) {
+          timed = null;
+        }
+        if (timed && timed.length) return { synced: true, lines: timed };
+      }
+    }
+    for (i = 0; i < tag.frames.length; i++) {
+      if (tag.frames[i].id === "USLT") {
+        var text = null;
+        try {
+          text = parseUslt(tag.frames[i].data);
+        } catch (e) {
+          text = null;
+        }
+        var clean = sanitizeLyrics(text);
+        if (clean) {
+          var parts = clean.split("\n");
+          var lines = [];
+          for (k = 0; k < parts.length && k < 800; k++) {
+            lines.push({ t: null, text: parts[k] });
+          }
+          if (lines.length) return { synced: false, lines: lines };
+        }
+      }
+    }
+    return null;
+  }
+
+  /* Read the first bytes of an MP3 file (shared gate for cover + lyrics).
+     Resolves ArrayBuffer, or null when not an MP3 / too small / unreadable. */
+  function readHead(file) {
+    return new Promise(function (resolve) {
       try {
         if (!file) {
-          done(null);
+          resolve(null);
           return;
         }
         var name = file.name || "";
         var type = file.type || "";
-        var isMp3 = /\.mp3$/i.test(name) || type === "audio/mpeg";
-        if (!isMp3) {
-          done(null);
+        if (!(/\.mp3$/i.test(name) || type === "audio/mpeg")) {
+          resolve(null);
           return;
         }
         var size = file.size || 0;
         var end = Math.min(size, 10 * 1024 * 1024);
         if (end < 10) {
-          done(null);
+          resolve(null);
           return;
         }
         var chunk = file.slice(0, end);
         if (chunk.arrayBuffer) {
           chunk.arrayBuffer().then(
             function (ab) {
-              try {
-                done(parseCover(ab));
-              } catch (e) {
-                done(null);
-              }
+              resolve(ab);
             },
             function () {
-              done(null);
+              resolve(null);
             }
           );
         } else {
           var reader = new FileReader();
           reader.onload = function () {
-            try {
-              done(parseCover(reader.result));
-            } catch (e) {
-              done(null);
-            }
+            resolve(reader.result);
           };
           reader.onerror = function () {
-            done(null);
+            resolve(null);
           };
           reader.readAsArrayBuffer(chunk);
         }
@@ -335,10 +540,58 @@
     });
   }
 
+  /* Detect embedded ID3v2 cover art (APIC) in an MP3 file.
+     Returns Promise<Blob|null> — never rejects. */
+  function extractCover(file) {
+    return readHead(file).then(function (ab) {
+      if (!ab) return null;
+      try {
+        return parseCover(ab);
+      } catch (e) {
+        return null;
+      }
+    });
+  }
+
+  /* Detect embedded lyrics (SYLT synced first, else USLT lines) in an MP3.
+     Returns Promise<{synced, lines:[{t, text}]}|null> — never rejects. */
+  function extractLyrics(file) {
+    return readHead(file).then(function (ab) {
+      if (!ab) return null;
+      try {
+        return buildLyrics(ab);
+      } catch (e) {
+        return null;
+      }
+    });
+  }
+
+  /* Read embedded cover + lyrics in a single pass over the file head.
+     Returns Promise<{cover: Blob|null, lyrics: object|null}> — never rejects. */
+  function extractMedia(file) {
+    return readHead(file).then(function (ab) {
+      var out = { cover: null, lyrics: null };
+      if (!ab) return out;
+      try {
+        out.cover = parseCover(ab);
+      } catch (e) {
+        out.cover = null;
+      }
+      try {
+        out.lyrics = buildLyrics(ab);
+      } catch (e) {
+        out.lyrics = null;
+      }
+      return out;
+    });
+  }
+
   global.MUSICGO_UPLOADS = {
     isLocal: isLocal,
     hydrate: hydrate,
     save: save,
     extractCover: extractCover,
+    extractLyrics: extractLyrics,
+    extractMedia: extractMedia,
   };
 })(window);

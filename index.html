@@ -94,6 +94,9 @@
             aria-pressed="true"
             title="Background video"
           ></button>
+          <button type="button" class="icon-btn" id="lyrics-size-dec" data-icon="minus" aria-label="Smaller lyrics" title="Smaller lyrics"></button>
+          <button type="button" class="icon-btn" id="lyrics-align-btn" data-icon="align-center" aria-label="Lyrics position" title="Lyrics position"></button>
+          <button type="button" class="icon-btn" id="lyrics-size-inc" data-icon="plus" aria-label="Larger lyrics" title="Larger lyrics"></button>
           <button type="button" class="icon-btn" id="minimize-btn" data-icon="chevron-down" aria-label="Minimize player" aria-pressed="false" title="Collapse to mini bar"></button>
           <button
             type="button"
@@ -302,6 +305,8 @@
     </div>
   </div>
 </div>
+
+<div class="lyrics-overlay" id="lyrics-overlay" hidden aria-hidden="true"><div class="lyrics-lines" id="lyrics-lines"></div></div>
 
     <div class="modal-backdrop" id="upload-modal" hidden>
       <form class="modal" id="upload-form" aria-label="Upload a song">
