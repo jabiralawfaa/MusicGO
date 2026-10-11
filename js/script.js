@@ -39,6 +39,7 @@
     lastVolume: 0.8,
     dragging: false,
     bgOff: storage.get("bg", "on") === "off",
+    minimized: false,
   };
 
   /* ------------------------------------------------------------------ dom */
@@ -79,6 +80,23 @@
   var canvas = document.getElementById("visualizer");
   var uploadModalEl = document.getElementById("upload-modal");
   var helpModalEl = document.getElementById("help-modal");
+  var minimizeBtn = document.getElementById("minimize-btn");
+  var miniBar = document.getElementById("mini-bar");
+  var miniThumb = document.getElementById("mini-thumb");
+  var miniTitle = document.getElementById("mini-title");
+  var miniArtist = document.getElementById("mini-artist");
+  var miniSeek = document.getElementById("mini-seek");
+  var miniSeekFill = document.getElementById("mini-seek-fill");
+  var miniCurrent = document.getElementById("mini-current");
+  var miniTotal = document.getElementById("mini-total");
+  var miniPlay = document.getElementById("mini-play");
+  var miniPrev = document.getElementById("mini-prev");
+  var miniNext = document.getElementById("mini-next");
+  var miniShuffle = document.getElementById("mini-shuffle");
+  var miniRepeat = document.getElementById("mini-repeat");
+  var miniVolBtn = document.getElementById("mini-vol-btn");
+  var miniDropup = document.getElementById("mini-dropup");
+  var miniVolumeEl = document.getElementById("mini-volume");
 
   function modalsOpen() {
     return (uploadModalEl && !uploadModalEl.hidden) || (helpModalEl && !helpModalEl.hidden);
@@ -143,6 +161,76 @@
       if (PLAYLISTS[i].label.toLowerCase() === wanted) return PLAYLISTS[i];
     }
     return null;
+  }
+
+  /* ------------------------------------------------------ minimize (mini) */
+
+  function syncMiniMeta() {
+    if (!miniBar) return;
+    var track = currentTrack();
+    if (miniThumb) {
+      var src = trackThumb(track);
+      if (miniThumb.getAttribute("src") !== src) miniThumb.src = src;
+    }
+    if (miniTitle) miniTitle.textContent = track ? track.name : "No track";
+    if (miniArtist) miniArtist.textContent = track ? track.artist : "—";
+  }
+
+  function syncMiniTransport() {
+    if (!miniBar) return;
+    if (miniPlay) {
+      var playing = !audio.paused && !audio.ended;
+      setIcon(miniPlay, playing ? "pause" : "play");
+      miniPlay.setAttribute("aria-label", playing ? "Pause" : "Play");
+    }
+    if (miniShuffle) {
+      miniShuffle.setAttribute("aria-pressed", String(state.shuffle));
+      miniShuffle.classList.toggle("is-active", state.shuffle);
+    }
+    if (miniRepeat) {
+      var labels = ["Off", "All", "One"];
+      miniRepeat.setAttribute("aria-pressed", String(state.repeat > 0));
+      miniRepeat.setAttribute("aria-label", "Repeat " + labels[state.repeat]);
+      setIcon(miniRepeat, state.repeat === 2 ? "repeat-1" : "repeat");
+    }
+    if (miniVolumeEl) {
+      var pct = Math.round(state.volume * 100);
+      miniVolumeEl.value = String(pct);
+      miniVolumeEl.style.setProperty("--val", pct + "%");
+    }
+    if (miniVolBtn) {
+      if (state.volume === 0) setIcon(miniVolBtn, "volume-x");
+      else if (state.volume < 0.5) setIcon(miniVolBtn, "volume-1");
+      else setIcon(miniVolBtn, "volume-2");
+    }
+  }
+
+  function closeMiniDropup() {
+    if (miniDropup && !miniDropup.hidden) miniDropup.hidden = true;
+    if (miniVolBtn) miniVolBtn.setAttribute("aria-expanded", "false");
+  }
+
+  function toggleMinimize() {
+    state.minimized = !state.minimized;
+    body.classList.toggle("is-minimized", state.minimized);
+    if (miniBar) miniBar.hidden = !state.minimized;
+    if (minimizeBtn) {
+      setIcon(minimizeBtn, state.minimized ? "chevron-up" : "chevron-down");
+      minimizeBtn.setAttribute("aria-pressed", String(state.minimized));
+      minimizeBtn.setAttribute(
+        "aria-label",
+        state.minimized ? "Expand player" : "Minimize player"
+      );
+      minimizeBtn.setAttribute(
+        "title",
+        state.minimized ? "Expand to full player" : "Collapse to mini bar"
+      );
+    }
+    if (state.minimized) {
+      closeMiniDropup();
+      syncMiniMeta();
+      syncMiniTransport();
+    }
   }
 
   /* ------------------------------------------------------------ bg video */
@@ -339,6 +427,7 @@
     trackArtist.textContent = track.artist;
     trackNumber.textContent = "Track " + pad2(state.index + 1);
     trackOf.textContent = "of " + list.length;
+    syncMiniMeta();
 
     var nextSrc = trackThumb(track);
     if (albumArt.getAttribute("src") !== nextSrc) {
@@ -372,6 +461,10 @@
     currentTimeEl.textContent = "0:00";
     totalTimeEl.textContent = "0:00";
     seek.setAttribute("aria-valuenow", "0");
+    if (miniSeekFill) miniSeekFill.style.width = "0%";
+    if (miniSeek) miniSeek.setAttribute("aria-valuenow", "0");
+    if (miniCurrent) miniCurrent.textContent = "0:00";
+    if (miniTotal) miniTotal.textContent = "0:00";
   }
 
   /* -------------------------------------------------------------- graph */
@@ -517,6 +610,10 @@
     volumeEl.style.setProperty("--val", pct + "%");
     volumeValue.textContent = String(pct);
     updateVolumeIcon(v);
+    if (miniVolumeEl) {
+      miniVolumeEl.value = String(pct);
+      miniVolumeEl.style.setProperty("--val", pct + "%");
+    }
     if (showFeedback) toast(v === 0 ? "Muted" : "Volume " + pct + "%");
   }
 
@@ -524,6 +621,18 @@
     if (v === 0) setIcon(muteBtn, "volume-x");
     else if (v < 0.5) setIcon(muteBtn, "volume-1");
     else setIcon(muteBtn, "volume-2");
+    if (miniVolBtn) {
+      if (v === 0) setIcon(miniVolBtn, "volume-x");
+      else if (v < 0.5) setIcon(miniVolBtn, "volume-1");
+      else setIcon(miniVolBtn, "volume-2");
+    }
+  }
+
+  function handleVolumeInput(rawValue) {
+    var value = Number(rawValue) / 100;
+    state.lastVolume = value > 0 ? value : state.lastVolume;
+    applyVolume(value, false);
+    storage.set("volume", String(Math.round(value * 100)));
   }
 
   function toggleMute() {
@@ -595,6 +704,111 @@
         audio.currentTime = audio.duration;
       }
     });
+  }
+
+  function miniSeekRatioFromEvent(clientX) {
+    if (!miniSeek) return 0;
+    var rect = miniSeek.getBoundingClientRect();
+    if (!rect.width) return 0;
+    return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  }
+
+  function bindMiniSeek() {
+    if (!miniSeek) return;
+    miniSeek.addEventListener("pointerdown", function (e) {
+      if (!isFinite(audio.duration)) return;
+      state.dragging = true;
+      miniSeek.classList.add("is-dragging");
+      try {
+        miniSeek.setPointerCapture(e.pointerId);
+      } catch (err) {}
+      seekTo(miniSeekRatioFromEvent(e.clientX));
+    });
+
+    miniSeek.addEventListener("pointermove", function (e) {
+      if (!state.dragging) return;
+      seekTo(miniSeekRatioFromEvent(e.clientX));
+    });
+
+    function endMiniDrag(e) {
+      if (!state.dragging) return;
+      state.dragging = false;
+      miniSeek.classList.remove("is-dragging");
+      if (e && e.pointerId !== undefined) {
+        try {
+          if (miniSeek.hasPointerCapture(e.pointerId)) {
+            miniSeek.releasePointerCapture(e.pointerId);
+          }
+        } catch (err) {}
+      }
+    }
+
+    miniSeek.addEventListener("pointerup", endMiniDrag);
+    miniSeek.addEventListener("pointercancel", endMiniDrag);
+
+    miniSeek.addEventListener("keydown", function (e) {
+      if (!isFinite(audio.duration)) return;
+      if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+        e.preventDefault();
+        audio.currentTime = Math.min(audio.duration, audio.currentTime + 5);
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+        e.preventDefault();
+        audio.currentTime = Math.max(0, audio.currentTime - 5);
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        audio.currentTime = 0;
+      } else if (e.key === "End") {
+        e.preventDefault();
+        audio.currentTime = audio.duration;
+      }
+    });
+  }
+
+  function bindMini() {
+    if (minimizeBtn) minimizeBtn.addEventListener("click", toggleMinimize);
+    if (miniThumb) {
+      miniThumb.addEventListener("error", function () {
+        if (miniThumb.src.indexOf(FALLBACK_IMG) !== -1) return;
+        miniThumb.src = FALLBACK_IMG;
+      });
+    }
+    if (miniPlay) miniPlay.addEventListener("click", togglePlay);
+    if (miniPrev) miniPrev.addEventListener("click", prevTrack);
+    if (miniNext) {
+      miniNext.addEventListener("click", function () {
+        nextTrack(true);
+      });
+    }
+    if (miniShuffle) miniShuffle.addEventListener("click", toggleShuffle);
+    if (miniRepeat) miniRepeat.addEventListener("click", cycleRepeat);
+    if (miniVolBtn && miniDropup) {
+      miniVolBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var willOpen = miniDropup.hidden;
+        miniDropup.hidden = !willOpen;
+        miniVolBtn.setAttribute("aria-expanded", String(willOpen));
+      });
+    }
+    if (miniVolumeEl) {
+      miniVolumeEl.addEventListener("input", function () {
+        handleVolumeInput(miniVolumeEl.value);
+      });
+    }
+    document.addEventListener("click", function (e) {
+      if (!miniDropup || miniDropup.hidden) return;
+      if (e.target && e.target.closest && e.target.closest(".mini-vol")) return;
+      closeMiniDropup();
+    });
+    document.addEventListener(
+      "keydown",
+      function (e) {
+        if (e.key === "Escape" && miniDropup && !miniDropup.hidden) {
+          closeMiniDropup();
+        }
+      },
+      true
+    );
+    bindMiniSeek();
   }
 
   /* ---------------------------------------------------------------- theme */
@@ -771,6 +985,8 @@
     seekThumb.style.left = pct + "%";
     progressCircle.style.strokeDashoffset = String(RING_C * (1 - ratio));
     seek.setAttribute("aria-valuenow", String(Math.round(pct)));
+    if (miniSeekFill) miniSeekFill.style.width = pct + "%";
+    if (miniSeek) miniSeek.setAttribute("aria-valuenow", String(Math.round(pct)));
   }
 
   function frame(now) {
@@ -787,12 +1003,14 @@
       var currentText = formatTime(current);
       if (currentText !== lastCurrentText) {
         currentTimeEl.textContent = currentText;
+        if (miniCurrent) miniCurrent.textContent = currentText;
         lastCurrentText = currentText;
       }
       if (isFinite(duration) && duration > 0) {
         var totalText = formatTime(duration);
         if (totalText !== lastTotalText) {
           totalTimeEl.textContent = totalText;
+          if (miniTotal) miniTotal.textContent = totalText;
           lastTotalText = totalText;
         }
       }
@@ -806,6 +1024,10 @@
   function toggleShuffle() {
     state.shuffle = !state.shuffle;
     shuffleBtn.setAttribute("aria-pressed", String(state.shuffle));
+    if (miniShuffle) {
+      miniShuffle.setAttribute("aria-pressed", String(state.shuffle));
+      miniShuffle.classList.toggle("is-active", state.shuffle);
+    }
     toast("Shuffle " + (state.shuffle ? "on" : "off"));
   }
 
@@ -815,6 +1037,11 @@
     repeatBtn.setAttribute("aria-pressed", String(state.repeat > 0));
     repeatBtn.setAttribute("aria-label", "Repeat " + labels[state.repeat]);
     setIcon(repeatBtn, state.repeat === 2 ? "repeat-1" : "repeat");
+    if (miniRepeat) {
+      miniRepeat.setAttribute("aria-pressed", String(state.repeat > 0));
+      miniRepeat.setAttribute("aria-label", "Repeat " + labels[state.repeat]);
+      setIcon(miniRepeat, state.repeat === 2 ? "repeat-1" : "repeat");
+    }
     toast("Repeat · " + labels[state.repeat]);
   }
 
@@ -845,10 +1072,7 @@
     repeatBtn.addEventListener("click", cycleRepeat);
 
     volumeEl.addEventListener("input", function () {
-      var value = Number(volumeEl.value) / 100;
-      state.lastVolume = value > 0 ? value : state.lastVolume;
-      applyVolume(value, false);
-      storage.set("volume", String(Math.round(value * 100)));
+      handleVolumeInput(volumeEl.value);
     });
 
     muteBtn.addEventListener("click", toggleMute);
@@ -871,6 +1095,10 @@
       albumStage.classList.add("playing");
       setIcon(playBtn, "pause");
       playBtn.setAttribute("aria-label", "Pause");
+      if (miniPlay) {
+        setIcon(miniPlay, "pause");
+        miniPlay.setAttribute("aria-label", "Pause");
+      }
       npBadge.classList.remove("is-hidden");
       resumeGraph();
     });
@@ -880,6 +1108,10 @@
       albumStage.classList.remove("playing");
       setIcon(playBtn, "play");
       playBtn.setAttribute("aria-label", "Play");
+      if (miniPlay) {
+        setIcon(miniPlay, "play");
+        miniPlay.setAttribute("aria-label", "Play");
+      }
       npBadge.classList.add("is-hidden");
     });
 
@@ -964,6 +1196,29 @@
     var closeBtn = document.getElementById("upload-close");
     var cancelBtn = document.getElementById("upload-cancel");
     var uploads = window.MUSICGO_UPLOADS;
+    var thumbField = document.getElementById("up-thumb-field");
+    var coverField = document.getElementById("up-cover-field");
+    var noCoverEl = document.getElementById("up-no-cover");
+    var srcEmbedded = document.getElementById("up-src-embedded");
+    var srcCustom = document.getElementById("up-src-custom");
+    var embeddedPreview = document.getElementById("up-embedded-preview");
+    var embeddedCover = null;
+    var embeddedURL = null;
+
+    function resetCoverState() {
+      if (embeddedURL) {
+        try {
+          window.URL.revokeObjectURL(embeddedURL);
+        } catch (e) {}
+        embeddedURL = null;
+      }
+      embeddedCover = null;
+      if (embeddedPreview) embeddedPreview.removeAttribute("src");
+      if (srcEmbedded) srcEmbedded.checked = true;
+      if (thumbField) thumbField.hidden = false;
+      if (coverField) coverField.hidden = true;
+      if (noCoverEl) noCoverEl.hidden = true;
+    }
 
     if (!uploads || !uploads.isLocal()) return;
     uploadBtn.hidden = false;
@@ -998,6 +1253,7 @@
       form.reset();
       audioInput.value = "";
       thumbInput.value = "";
+      resetCoverState();
       fillPlaylists();
       clearError();
       modal.hidden = false;
@@ -1011,6 +1267,7 @@
 
     function closeModal() {
       modal.classList.remove("is-open");
+      resetCoverState();
       window.setTimeout(function () {
         modal.hidden = true;
         clearError();
@@ -1034,6 +1291,54 @@
       newWrap.hidden = !isNew;
       if (isNew) newName.focus();
     });
+
+    audioInput.addEventListener("change", function () {
+      if (embeddedURL) {
+        try {
+          window.URL.revokeObjectURL(embeddedURL);
+        } catch (e) {}
+        embeddedURL = null;
+      }
+      embeddedCover = null;
+      if (embeddedPreview) embeddedPreview.removeAttribute("src");
+      if (coverField) coverField.hidden = true;
+      if (noCoverEl) noCoverEl.hidden = true;
+      if (thumbField) thumbField.hidden = false;
+      if (srcEmbedded) srcEmbedded.checked = true;
+      var file = audioInput.files && audioInput.files[0];
+      if (!file) return;
+      if (!uploads || !uploads.extractCover) return;
+      uploads.extractCover(file).then(function (blob) {
+        var cur = audioInput.files && audioInput.files[0];
+        if (cur !== file || modal.hidden) return;
+        if (blob) {
+          embeddedCover = blob;
+          try {
+            embeddedURL = window.URL.createObjectURL(blob);
+          } catch (e) {
+            embeddedURL = null;
+          }
+          if (embeddedPreview && embeddedURL) embeddedPreview.src = embeddedURL;
+          if (coverField) coverField.hidden = false;
+          if (srcEmbedded) srcEmbedded.checked = true;
+          if (thumbField) thumbField.hidden = true;
+        } else {
+          if (noCoverEl) noCoverEl.hidden = false;
+          if (thumbField) thumbField.hidden = false;
+        }
+      });
+    });
+
+    if (srcEmbedded) {
+      srcEmbedded.addEventListener("change", function () {
+        if (srcEmbedded.checked && thumbField) thumbField.hidden = true;
+      });
+    }
+    if (srcCustom) {
+      srcCustom.addEventListener("change", function () {
+        if (srcCustom.checked && thumbField) thumbField.hidden = false;
+      });
+    }
 
     form.addEventListener("submit", function (e) {
       e.preventDefault();
@@ -1094,6 +1399,7 @@
       }
 
       submitBtn.disabled = true;
+      var useEmbedded = embeddedCover && srcEmbedded && srcEmbedded.checked;
       uploads
         .save({
           title: title,
@@ -1102,7 +1408,7 @@
           playlistLabel: targetLabel,
           isNewPlaylist: isNew,
           audioBlob: file,
-          thumbBlob: thumbFile || null,
+          thumbBlob: useEmbedded ? embeddedCover : thumbFile || null,
         })
         .then(function (record) {
           submitBtn.disabled = false;
@@ -1210,6 +1516,7 @@
     applyVolume(storedVolume / 100, false);
 
     bindSeek();
+    bindMini();
     bindEvents();
     bindUpload();
     bindHelp();

@@ -157,9 +157,188 @@
     });
   }
 
+  function syncSafe(b0, b1, b2, b3) {
+    return ((b0 & 0x7f) << 21) | ((b1 & 0x7f) << 14) | ((b2 & 0x7f) << 7) | (b3 & 0x7f);
+  }
+
+  function uint32BE(bytes, at) {
+    return (
+      (((bytes[at] << 24) | (bytes[at + 1] << 16) | (bytes[at + 2] << 8) | bytes[at + 3]) >>>
+        0) ||
+      0
+    );
+  }
+
+  function latin1(bytes, start, end) {
+    var s = "";
+    for (var i = start; i < end; i++) s += String.fromCharCode(bytes[i] & 0xff);
+    return s;
+  }
+
+  function parseApic(payload) {
+    if (!payload || payload.length < 4) return null;
+    var enc = payload[0];
+    var i = 1;
+    var mimeEnd = -1;
+    var limit = Math.min(payload.length, i + 64 + 1);
+    var m;
+    for (m = i; m < limit; m++) {
+      if (payload[m] === 0x00) {
+        mimeEnd = m;
+        break;
+      }
+    }
+    if (mimeEnd === -1) return null;
+    var mime = latin1(payload, i, mimeEnd);
+    i = mimeEnd + 1;
+    if (i >= payload.length) return null;
+    i++; /* picture-type byte */
+    if (i > payload.length) return null;
+    if (enc === 1 || enc === 2) {
+      var j = i;
+      var found = -1;
+      while (j + 1 < payload.length) {
+        if (payload[j] === 0x00 && payload[j + 1] === 0x00 && (j - i) % 2 === 0) {
+          found = j;
+          break;
+        }
+        j++;
+      }
+      if (found === -1) return null;
+      i = found + 2;
+    } else {
+      var k = i;
+      while (k < payload.length && payload[k] !== 0x00) k++;
+      if (k >= payload.length) return null;
+      i = k + 1;
+    }
+    if (i >= payload.length) return null;
+    var imgBytes = payload.subarray(i);
+    if (imgBytes.length === 0) return null;
+    var outType = mime || "image/jpeg";
+    if (outType.indexOf("image/") !== 0) return null;
+    try {
+      return new Blob([imgBytes], { type: outType });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function parseCover(buf) {
+    var bytes = new Uint8Array(buf);
+    if (bytes.length < 10) return null;
+    if (bytes[0] !== 0x49 || bytes[1] !== 0x44 || bytes[2] !== 0x33) return null;
+    var major = bytes[3];
+    if (major !== 3 && major !== 4) return null;
+    var flags = bytes[5];
+    var tagSize = syncSafe(bytes[6], bytes[7], bytes[8], bytes[9]);
+    var tagEnd = 10 + tagSize;
+    if (tagEnd > bytes.length) tagEnd = bytes.length;
+    if (tagEnd <= 10) return null;
+    var body;
+    if (flags & 0x80) {
+      var tmp = new Uint8Array(tagEnd - 10);
+      var w = 0;
+      var r = 10;
+      while (r < tagEnd) {
+        var by = bytes[r];
+        tmp[w++] = by;
+        if (by === 0xff && r + 1 < tagEnd && bytes[r + 1] === 0x00) r++;
+        r++;
+      }
+      body = tmp.subarray(0, w);
+    } else {
+      body = bytes.subarray(10, tagEnd);
+    }
+    var pos = 0;
+    if (flags & 0x40) {
+      if (body.length < 4) return null;
+      var extSize;
+      if (major === 4) {
+        extSize = syncSafe(body[0], body[1], body[2], body[3]);
+      } else {
+        extSize = 4 + uint32BE(body, 0);
+      }
+      pos = extSize;
+      if (pos >= body.length) return null;
+    }
+    while (pos + 10 <= body.length) {
+      var id = latin1(body, pos, pos + 4);
+      var fsize = major === 4 ? syncSafe(body[pos + 4], body[pos + 5], body[pos + 6], body[pos + 7]) : uint32BE(body, pos + 4);
+      if (body[pos] === 0 || fsize === 0) break;
+      if (pos + 10 + fsize > body.length) break;
+      if (id === "APIC") {
+        var blob = parseApic(body.subarray(pos + 10, pos + 10 + fsize));
+        if (blob) return blob;
+      }
+      pos += 10 + fsize;
+    }
+    return null;
+  }
+
+  /* Detect embedded ID3v2 cover art (APIC) in an MP3 file.
+     Returns Promise<Blob|null> — never rejects. */
+  function extractCover(file) {
+    return new Promise(function (resolve) {
+      function done(value) {
+        resolve(value);
+      }
+      try {
+        if (!file) {
+          done(null);
+          return;
+        }
+        var name = file.name || "";
+        var type = file.type || "";
+        var isMp3 = /\.mp3$/i.test(name) || type === "audio/mpeg";
+        if (!isMp3) {
+          done(null);
+          return;
+        }
+        var size = file.size || 0;
+        var end = Math.min(size, 10 * 1024 * 1024);
+        if (end < 10) {
+          done(null);
+          return;
+        }
+        var chunk = file.slice(0, end);
+        if (chunk.arrayBuffer) {
+          chunk.arrayBuffer().then(
+            function (ab) {
+              try {
+                done(parseCover(ab));
+              } catch (e) {
+                done(null);
+              }
+            },
+            function () {
+              done(null);
+            }
+          );
+        } else {
+          var reader = new FileReader();
+          reader.onload = function () {
+            try {
+              done(parseCover(reader.result));
+            } catch (e) {
+              done(null);
+            }
+          };
+          reader.onerror = function () {
+            done(null);
+          };
+          reader.readAsArrayBuffer(chunk);
+        }
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
   global.MUSICGO_UPLOADS = {
     isLocal: isLocal,
     hydrate: hydrate,
     save: save,
+    extractCover: extractCover,
   };
 })(window);

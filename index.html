@@ -94,6 +94,7 @@
             aria-pressed="true"
             title="Background video"
           ></button>
+          <button type="button" class="icon-btn" id="minimize-btn" data-icon="chevron-down" aria-label="Minimize player" aria-pressed="false" title="Collapse to mini bar"></button>
           <button
             type="button"
             class="icon-btn"
@@ -276,6 +277,32 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<div class="mini-bar" id="mini-bar" hidden aria-label="Mini player">
+  <div class="mini-meta">
+    <img class="mini-thumb" id="mini-thumb" src="images/img1.jpg" alt="" />
+    <span class="mini-text"><span class="mini-title" id="mini-title"></span><span class="mini-artist" id="mini-artist"></span></span>
+  </div>
+  <div class="mini-progress">
+    <div class="mini-seek" id="mini-seek" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <span class="mini-seek-fill" id="mini-seek-fill"></span>
+    </div>
+    <span class="mini-time"><span id="mini-current">0:00</span> / <span id="mini-total">0:00</span></span>
+  </div>
+  <div class="mini-controls">
+    <button type="button" class="mini-btn" id="mini-shuffle" data-icon="shuffle" aria-label="Shuffle" aria-pressed="false" title="Shuffle (S)"></button>
+    <button type="button" class="mini-btn" id="mini-prev" data-icon="skip-back" aria-label="Previous track" title="Previous"></button>
+    <button type="button" class="mini-btn mini-play" id="mini-play" data-icon="play" aria-label="Play" title="Play / Pause (Space)"></button>
+    <button type="button" class="mini-btn" id="mini-next" data-icon="skip-forward" aria-label="Next track" title="Next"></button>
+    <button type="button" class="mini-btn" id="mini-repeat" data-icon="repeat" aria-label="Repeat off" aria-pressed="false" title="Repeat (R)"></button>
+    <div class="mini-vol">
+      <button type="button" class="mini-btn" id="mini-vol-btn" data-icon="volume-2" aria-label="Volume" aria-expanded="false" title="Volume"></button>
+      <div class="mini-dropup" id="mini-dropup" hidden>
+        <input type="range" id="mini-volume" min="0" max="100" value="80" aria-label="Volume" style="--val: 80%" />
+      </div>
+    </div>
+  </div>
+</div>
+
     <div class="modal-backdrop" id="upload-modal" hidden>
       <form class="modal" id="upload-form" aria-label="Upload a song">
         <div class="modal-head">
@@ -305,10 +332,26 @@
           <input type="text" id="up-artist" name="artist" maxlength="80" />
         </label>
 
-        <label class="field">
+        <label class="field" id="up-thumb-field">
           <span class="field-label">Thumbnail <em>(optional)</em></span>
           <input type="file" id="up-thumb" name="thumb" accept="image/*" />
         </label>
+
+        <div class="field" id="up-cover-field" hidden>
+          <span class="field-label" id="up-cover-label">Thumbnail source</span>
+          <div class="cover-choices" role="radiogroup" aria-labelledby="up-cover-label">
+            <label class="cover-choice" id="up-embedded-choice">
+              <input type="radio" name="up-thumb-src" id="up-src-embedded" value="embedded" checked />
+              <img class="cover-choice-thumb" id="up-embedded-preview" src="images/img1.jpg" alt="" />
+              <span>Cover in file</span>
+            </label>
+            <label class="cover-choice" id="up-custom-choice">
+              <input type="radio" name="up-thumb-src" id="up-src-custom" value="custom" />
+              <span>Upload new thumbnail</span>
+            </label>
+          </div>
+        </div>
+        <p class="field-hint" id="up-no-cover" hidden>No embedded cover found in this file.</p>
 
         <label class="field">
           <span class="field-label">Playlist</span>
