@@ -358,6 +358,12 @@
         </div>
         <p class="field-hint" id="up-no-cover" hidden>No embedded cover found in this file.</p>
 
+        <label class="field" id="up-lrc-field">
+          <span class="field-label">Lyrics file <em>(optional .lrc)</em></span>
+          <input type="file" id="up-lrc" name="lrc" accept=".lrc,.txt" />
+        </label>
+        <p class="field-hint" id="up-lrc-note" hidden>Lyrics loaded from file.</p>
+
         <label class="field">
           <span class="field-label">Playlist</span>
           <select id="up-playlist" name="playlist"></select>
@@ -376,6 +382,104 @@
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" id="upload-cancel">Cancel</button>
           <button type="submit" class="btn btn-primary" id="upload-submit">Upload</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="modal-backdrop" id="edit-modal" hidden>
+      <form class="modal" id="edit-form" aria-label="Edit track">
+        <div class="modal-head">
+          <h2 class="modal-title">Edit track</h2>
+          <button
+            type="button"
+            class="icon-btn"
+            id="edit-close"
+            data-icon="x"
+            aria-label="Close edit track"
+            title="Close"
+          ></button>
+        </div>
+
+        <label class="field">
+          <span class="field-label">Title</span>
+          <input type="text" id="edit-title" name="title" maxlength="80" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">Artist</span>
+          <input type="text" id="edit-artist" name="artist" maxlength="80" />
+        </label>
+
+        <div class="field" id="edit-thumb-field">
+          <span class="field-label" id="edit-thumb-label">Thumbnail</span>
+          <div class="cover-choices" role="radiogroup" aria-labelledby="edit-thumb-label">
+            <label class="cover-choice" id="edit-keep-choice">
+              <input type="radio" name="edit-thumb-src" id="edit-src-keep" value="keep" checked />
+              <img class="cover-choice-thumb" id="edit-thumb-preview" src="images/img1.jpg" alt="" />
+              <span>Keep current</span>
+            </label>
+            <label class="cover-choice" id="edit-new-choice">
+              <input type="radio" name="edit-thumb-src" id="edit-src-new" value="new" />
+              <span>Upload new</span>
+            </label>
+          </div>
+          <input type="file" id="edit-thumb-file" name="thumb" accept="image/*" />
+        </div>
+
+        <div class="field" id="edit-lyrics-field">
+          <span class="field-label">Lyrics</span>
+          <div class="edit-lyrics-status">
+            <p class="field-hint" id="edit-lyrics-state">No lyrics</p>
+            <button type="button" class="btn btn-ghost" id="edit-lyrics-open">Edit lyrics</button>
+          </div>
+          <label class="field">
+            <span class="field-label">Replace lyrics <em>(optional .lrc)</em></span>
+            <input type="file" id="edit-lrc" name="lrc" accept=".lrc,.txt" />
+          </label>
+          <div class="edit-lyrics-row">
+            <button type="button" class="btn btn-ghost" id="edit-lyrics-remove" hidden>Remove lyrics</button>
+          </div>
+        </div>
+
+        <p class="form-error" id="edit-error" hidden></p>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="edit-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="edit-save">Save</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="modal-backdrop" id="lyrics-editor-modal" hidden>
+      <form class="modal modal-lyrics" id="lyrics-editor-form" aria-label="Edit lyrics">
+        <div class="modal-head">
+          <h2 class="modal-title">Edit lyrics</h2>
+          <button
+            type="button"
+            class="icon-btn"
+            id="lyrics-editor-close"
+            data-icon="x"
+            aria-label="Close lyrics editor"
+            title="Close"
+          ></button>
+        </div>
+
+        <p class="field-hint" id="lyrics-editor-meta">—</p>
+
+        <div id="lyrics-editor" hidden>
+          <div class="lyric-rows" id="lyric-rows"></div>
+          <button type="button" class="btn btn-ghost" id="lyrics-add-line">+ Add line</button>
+        </div>
+
+        <p class="field-hint" id="lyrics-editor-hint" hidden>No timed lines to edit — attach a timed .lrc file.</p>
+
+        <p class="field-hint" id="lyrics-words-preview" hidden></p>
+
+        <p class="form-error" id="lyrics-editor-error" hidden></p>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="lyrics-editor-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="lyrics-editor-save">Save lyrics</button>
         </div>
       </form>
     </div>

@@ -88,6 +88,8 @@
   var canvas = document.getElementById("visualizer");
   var uploadModalEl = document.getElementById("upload-modal");
   var helpModalEl = document.getElementById("help-modal");
+  var editModalEl = document.getElementById("edit-modal");
+  var lyricsEditorModalEl = document.getElementById("lyrics-editor-modal");
   var minimizeBtn = document.getElementById("minimize-btn");
   var miniBar = document.getElementById("mini-bar");
   var miniThumb = document.getElementById("mini-thumb");
@@ -112,9 +114,16 @@
   var lyricsLines = document.getElementById("lyrics-lines");
   var lastLyricsTrack = null;
   var lyricActiveIndex = -1;
+  var lyricSweepKey = "";
+  var lyricSweepRM = null;
 
   function modalsOpen() {
-    return (uploadModalEl && !uploadModalEl.hidden) || (helpModalEl && !helpModalEl.hidden);
+    return (
+      (uploadModalEl && !uploadModalEl.hidden) ||
+      (helpModalEl && !helpModalEl.hidden) ||
+      (editModalEl && !editModalEl.hidden) ||
+      (lyricsEditorModalEl && !lyricsEditorModalEl.hidden)
+    );
   }
 
   /* ---------------------------------------------------------------- toast */
@@ -227,8 +236,88 @@
 
   /* ----------------------------------------------- minimized karaoke lyrics */
 
+  function renderLyricWords(el, line) {
+    el.textContent = "";
+    for (var i = 0; i < line.words.length; i++) {
+      var w = document.createElement("span");
+      w.className = "ly-word";
+      w.textContent = line.words[i].text;
+      w.setAttribute("data-text", line.words[i].text);
+      el.appendChild(w);
+      if (i < line.words.length - 1) el.appendChild(document.createTextNode(" "));
+    }
+  }
+
+  function sweepReduced() {
+    if (lyricSweepRM === null) {
+      lyricSweepRM = false;
+      try {
+        var mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+        lyricSweepRM = !!mq.matches;
+        var upd = function (e) {
+          lyricSweepRM = !!e.matches;
+        };
+        if (mq.addEventListener) mq.addEventListener("change", upd);
+        else if (mq.addListener) mq.addListener(upd);
+      } catch (err) {
+        lyricSweepRM = false;
+      }
+    }
+    return lyricSweepRM;
+  }
+
+  function paintLyricSweep(line, lit, bucket) {
+    if (!lyricsLines) return;
+    var activeEl = lyricsLines.querySelector(".lyric-line.is-active");
+    if (!activeEl) return;
+    var spans = activeEl.querySelectorAll(".ly-word");
+    for (var i = 0; i < line.words.length && i < spans.length; i++) {
+      var sp = spans[i];
+      if (i < lit - 1) {
+        sp.classList.add("is-lit");
+        sp.classList.remove("sweep");
+        sp.style.removeProperty("--sw");
+      } else if (i === lit - 1) {
+        sp.classList.add("is-lit");
+        sp.classList.add("sweep");
+        sp.style.setProperty("--sw", bucket * 5 + "%");
+      } else {
+        sp.classList.remove("is-lit");
+        sp.classList.remove("sweep");
+        sp.style.removeProperty("--sw");
+      }
+    }
+  }
+
+  function updateLyricSweep() {
+    if (!lyricsOverlay || lyricsOverlay.hidden || !lyricsLines) return;
+    var track = currentTrack();
+    var lyric = track && track.lyrics ? track.lyrics : null;
+    if (!lyric || !lyric.synced || !lyric.lines || !lyric.lines.length) return;
+    if (lyricActiveIndex < 0 || !lyric.lines[lyricActiveIndex]) return;
+    var line = lyric.lines[lyricActiveIndex];
+    if (!line.words || !line.words.length) return;
+    var ms = audio.currentTime * 1000;
+    var lit = 0;
+    while (lit < line.words.length && line.words[lit].t <= ms) lit++;
+    var bucket = 20;
+    if (lit > 0 && !sweepReduced()) {
+      var wt = line.words[lit - 1].t;
+      var nt = lit < line.words.length ? line.words[lit].t : wt + 800;
+      var frac = nt > wt ? (ms - wt) / (nt - wt) : 1;
+      if (frac < 0) frac = 0;
+      if (frac > 1) frac = 1;
+      bucket = Math.floor(frac * 20);
+    }
+    var key = lyricActiveIndex + ":" + lit + ":" + bucket;
+    if (key === lyricSweepKey) return;
+    lyricSweepKey = key;
+    paintLyricSweep(line, lit, bucket);
+  }
+
   function renderLyricLines(lyric) {
     if (!lyricsLines) return;
+    lyricSweepKey = "";
     lyricsLines.textContent = "";
     var i, el;
     if (!lyric.synced) {
@@ -254,7 +343,12 @@
     }
     el = document.createElement("div");
     el.className = "lyric-line is-active";
-    el.textContent = lyric.lines[idx].text;
+    if (lyric.lines[idx].words && lyric.lines[idx].words.length) {
+      el.classList.add("has-words");
+      renderLyricWords(el, lyric.lines[idx]);
+    } else {
+      el.textContent = lyric.lines[idx].text;
+    }
     lyricsLines.appendChild(el);
     if (idx + 1 < lyric.lines.length) {
       var next = document.createElement("div");
@@ -308,6 +402,7 @@
         lyricsLines.textContent = "";
         lyricsLines.classList.remove("is-static");
       }
+      lyricSweepKey = "";
       lastLyricsTrack = null;
       lyricActiveIndex = -1;
       return;
@@ -510,6 +605,50 @@
       eq.innerHTML = "<span></span><span></span><span></span>";
       tail.appendChild(playGlyph);
       tail.appendChild(eq);
+      if (track.uploadId) {
+        var editGlyph = document.createElement("span");
+        editGlyph.className = "q-edit";
+        editGlyph.setAttribute("role", "button");
+        editGlyph.setAttribute("tabindex", "0");
+        editGlyph.setAttribute("data-icon", "pencil");
+        editGlyph.setAttribute("aria-label", "Edit track info");
+        editGlyph.setAttribute("title", "Edit track info");
+        (function (t) {
+          function openEdit(e) {
+            if (e) {
+              if (e.stopPropagation) e.stopPropagation();
+              if (e.preventDefault) e.preventDefault();
+            }
+            openEditModal(t);
+          }
+          editGlyph.addEventListener("click", openEdit);
+          editGlyph.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" || e.key === " ") openEdit(e);
+          });
+        })(track);
+        tail.appendChild(editGlyph);
+        var lyricGlyph = document.createElement("span");
+        lyricGlyph.className = "q-lyrics";
+        lyricGlyph.setAttribute("role", "button");
+        lyricGlyph.setAttribute("tabindex", "0");
+        lyricGlyph.setAttribute("data-icon", "text-quote");
+        lyricGlyph.setAttribute("aria-label", "Edit lyrics");
+        lyricGlyph.setAttribute("title", "Edit lyrics");
+        (function (t) {
+          function openLyrics(e) {
+            if (e) {
+              if (e.stopPropagation) e.stopPropagation();
+              if (e.preventDefault) e.preventDefault();
+            }
+            openLyricsEditor(t, false);
+          }
+          lyricGlyph.addEventListener("click", openLyrics);
+          lyricGlyph.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" || e.key === " ") openLyrics(e);
+          });
+        })(track);
+        tail.appendChild(lyricGlyph);
+      }
 
       btn.appendChild(idx);
       btn.appendChild(thumb);
@@ -1182,6 +1321,8 @@
 
     if (lyricsOverlay && !lyricsOverlay.hidden) updateLyricActive(false);
 
+    if (lyricsOverlay && !lyricsOverlay.hidden) updateLyricSweep();
+
     drawVisualizer(time);
   }
 
@@ -1344,6 +1485,30 @@
 
   /* ---------------------------------------------------------------- upload */
 
+  function readLrcFile(file) {
+    return new Promise(function (resolve) {
+      try {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var parsed = null;
+          try {
+            var uploads = window.MUSICGO_UPLOADS;
+            if (uploads && uploads.parseLrc) parsed = uploads.parseLrc(reader.result);
+          } catch (e) {
+            parsed = null;
+          }
+          resolve(parsed);
+        };
+        reader.onerror = function () {
+          resolve(null);
+        };
+        reader.readAsText(file);
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
   function bindUpload() {
     var uploadBtn = document.getElementById("upload-btn");
     var modal = document.getElementById("upload-modal");
@@ -1371,6 +1536,10 @@
     var embeddedCover = null;
     var embeddedURL = null;
     var embeddedLyrics = null;
+    var lrcInput = document.getElementById("up-lrc");
+    var lrcNote = document.getElementById("up-lrc-note");
+    var lrcLyrics = null;
+    var lastLrcFile = null;
 
     function resetCoverState() {
       if (embeddedURL) {
@@ -1381,6 +1550,9 @@
       }
       embeddedCover = null;
       embeddedLyrics = null;
+      lrcLyrics = null;
+      lastLrcFile = null;
+      if (lrcNote) lrcNote.hidden = true;
       if (embeddedPreview) embeddedPreview.removeAttribute("src");
       if (srcEmbedded) srcEmbedded.checked = true;
       if (thumbField) thumbField.hidden = false;
@@ -1421,6 +1593,7 @@
       form.reset();
       audioInput.value = "";
       thumbInput.value = "";
+      if (lrcInput) lrcInput.value = "";
       resetCoverState();
       fillPlaylists();
       clearError();
@@ -1516,6 +1689,25 @@
       });
     }
 
+    if (lrcInput) {
+      lrcInput.addEventListener("change", function () {
+        lrcLyrics = null;
+        lastLrcFile = null;
+        if (lrcNote) lrcNote.hidden = true;
+        var f = lrcInput.files && lrcInput.files[0];
+        if (!f) return;
+        readLrcFile(f).then(function (parsed) {
+          var cur = lrcInput.files && lrcInput.files[0];
+          if (cur !== f || modal.hidden) return;
+          if (parsed) {
+            lrcLyrics = parsed;
+            lastLrcFile = f;
+            if (lrcNote) lrcNote.hidden = false;
+          }
+        });
+      });
+    }
+
     form.addEventListener("submit", function (e) {
       e.preventDefault();
       clearError();
@@ -1574,60 +1766,773 @@
         targetLabel = pl0 ? pl0.label : "";
       }
 
-      submitBtn.disabled = true;
-      var useEmbedded = embeddedCover && srcEmbedded && srcEmbedded.checked;
-      uploads
-        .save({
-          title: title,
-          artist: artist,
-          playlistId: targetId,
-          playlistLabel: targetLabel,
-          isNewPlaylist: isNew,
-          audioBlob: file,
-          thumbBlob: useEmbedded ? embeddedCover : thumbFile || null,
-          lyrics: embeddedLyrics || null,
-        })
-        .then(function (record) {
+      var lrcFile = lrcInput.files && lrcInput.files[0];
+      if (lrcFile && lrcFile !== lastLrcFile) {
+        submitBtn.disabled = true;
+        readLrcFile(lrcFile).then(function (parsed) {
           submitBtn.disabled = false;
-          var track = {
-            name: record.title,
-            artist: record.artist,
-            audio: "",
-            custom: true,
-            src: window.URL.createObjectURL(record.audioBlob),
-            thumb: record.thumbBlob ? window.URL.createObjectURL(record.thumbBlob) : null,
-            uploadId: record.id,
-            lyrics: record.lyrics || null,
-          };
-
-          var target = findPlaylist(targetId);
-          if (!target) {
-            target = {
-              id: targetId,
-              label: targetLabel,
-              bgVideo: "videos/wallpaper1.mp4",
-              tracks: [],
-            };
-            PLAYLISTS.push(target);
-            renderTabs();
+          if (modal.hidden) return;
+          if (!parsed) {
+            showError("No timed lines found in .lrc");
+            return;
           }
-          target.tracks.push(track);
-
-          var isCurrent = state.playlist && state.playlist.id === targetId;
-          if (isNew) {
-            if (audio.paused) loadPlaylist(targetId, { autoplay: false });
-            else renderTabs();
-          } else if (isCurrent) {
-            renderQueue();
-          }
-
-          closeModal();
-          toast((isNew ? "Created " : "Added to ") + targetLabel);
-        })
-        .catch(function (err) {
-          submitBtn.disabled = false;
-          showError("Upload failed: " + (err && err.message ? err.message : "storage error"));
+          lrcLyrics = parsed;
+          lastLrcFile = lrcFile;
+          if (lrcNote) lrcNote.hidden = false;
+          doUploadSave(parsed);
         });
+        return;
+      }
+      if (lrcFile && !lrcLyrics) {
+        showError("No timed lines found in .lrc");
+        return;
+      }
+      doUploadSave(lrcLyrics || null);
+
+      function doUploadSave(lrcParsed) {
+        submitBtn.disabled = true;
+        var useEmbedded = embeddedCover && srcEmbedded && srcEmbedded.checked;
+        uploads
+          .save({
+            title: title,
+            artist: artist,
+            playlistId: targetId,
+            playlistLabel: targetLabel,
+            isNewPlaylist: isNew,
+            audioBlob: file,
+            thumbBlob: useEmbedded ? embeddedCover : thumbFile || null,
+            lyrics: lrcParsed || embeddedLyrics || null,
+          })
+          .then(function (record) {
+            submitBtn.disabled = false;
+            var track = {
+              name: record.title,
+              artist: record.artist,
+              audio: "",
+              custom: true,
+              src: window.URL.createObjectURL(record.audioBlob),
+              thumb: record.thumbBlob ? window.URL.createObjectURL(record.thumbBlob) : null,
+              uploadId: record.id,
+              lyrics: record.lyrics || null,
+            };
+
+            var target = findPlaylist(targetId);
+            if (!target) {
+              target = {
+                id: targetId,
+                label: targetLabel,
+                bgVideo: "videos/wallpaper1.mp4",
+                tracks: [],
+              };
+              PLAYLISTS.push(target);
+              renderTabs();
+            }
+            target.tracks.push(track);
+
+            var isCurrent = state.playlist && state.playlist.id === targetId;
+            if (isNew) {
+              if (audio.paused) loadPlaylist(targetId, { autoplay: false });
+              else renderTabs();
+            } else if (isCurrent) {
+              renderQueue();
+            }
+
+            closeModal();
+            toast((isNew ? "Created " : "Added to ") + targetLabel);
+          })
+          .catch(function (err) {
+            submitBtn.disabled = false;
+            showError("Upload failed: " + (err && err.message ? err.message : "storage error"));
+          });
+      }
+    });
+  }
+
+  /* -------------------------------------------------------------- track edit */
+
+  var editTarget = null;
+
+  function lyricsStateLabel(lyric) {
+    if (!lyric || !lyric.lines || !lyric.lines.length) return "No lyrics";
+    return (lyric.synced ? "Synced" : "Static") + " lyrics (" + lyric.lines.length + " lines)";
+  }
+
+  function refreshEditLyricsState() {
+    if (!editTarget) return;
+    var lyric = editTarget.removeLyrics
+      ? null
+      : editTarget.pendingLyrics || editTarget.record.lyrics || null;
+    if (editTarget.editorLines) {
+      lyric = editTarget.editorLines.length
+        ? { synced: true, lines: editTarget.editorLines }
+        : null;
+    }
+    var stateEl = document.getElementById("edit-lyrics-state");
+    if (stateEl) stateEl.textContent = lyricsStateLabel(lyric);
+    var removeBtn = document.getElementById("edit-lyrics-remove");
+    if (removeBtn) removeBtn.hidden = !lyric;
+  }
+
+  function formatLyricTime(ms) {
+    if (!isFinite(ms) || ms < 0) ms = 0;
+    ms = Math.round(ms);
+    var m = Math.floor(ms / 60000);
+    var s = Math.floor((ms % 60000) / 1000);
+    var cs = Math.floor((ms % 1000) / 10);
+    return pad2(m) + ":" + pad2(s) + "." + pad2(cs);
+  }
+
+  function parseLyricTime(str) {
+    var m = String(str).trim().match(/^(\d+):(\d{1,2})(?:\.(\d{1,3}))?$/);
+    if (!m) return null;
+    var sec = parseInt(m[2], 10);
+    if (sec > 59) return null;
+    var ms = parseInt(m[1], 10) * 60000 + sec * 1000;
+    var frac = m[3] || "";
+    if (frac.length === 1) ms += parseInt(frac, 10) * 100;
+    else if (frac.length === 2) ms += parseInt(frac, 10) * 10;
+    else if (frac.length === 3) ms += parseInt(frac, 10);
+    return ms;
+  }
+
+  function cloneLyricLines(lines) {
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      var entry = {
+        t: lines[i].t,
+        text: lines[i].text,
+        raw: formatLyricTime(lines[i].t),
+        origText: lines[i].text,
+      };
+      if (lines[i].words) {
+        entry.words = lines[i].words.map(function (w) {
+          return { t: w.t, text: w.text };
+        });
+      }
+      out.push(entry);
+    }
+    return out;
+  }
+
+  function buildEditorLyrics(rows) {
+    var lines = [];
+    var total = 0;
+    var i;
+    for (i = 0; i < rows.length; i++) {
+      var text = String(rows[i].text).trim();
+      if (!text) continue;
+      var t = rows[i].t;
+      if (t === null || t === undefined || !isFinite(t) || t < 0) return false;
+      if (lines.length >= 800 || total >= 20000) break;
+      var room = 20000 - total;
+      if (room <= 0) break;
+      if (text.length > room) text = text.slice(0, room);
+      if (!text) break;
+      var built = { t: t, text: text };
+      if (rows[i].words && text === rows[i].origText) {
+        built.words = rows[i].words.map(function (w) {
+          return { t: w.t, text: w.text };
+        });
+      }
+      lines.push(built);
+      total += text.length;
+    }
+    var seq = [];
+    for (i = 0; i < lines.length; i++) seq.push({ line: lines[i], at: i });
+    seq.sort(function (a, b) {
+      if (a.line.t !== b.line.t) return a.line.t - b.line.t;
+      return a.at - b.at;
+    });
+    lines = [];
+    for (i = 0; i < seq.length; i++) lines.push(seq[i].line);
+    if (!lines.length) return null;
+    return { synced: true, lines: lines };
+  }
+
+  function resortLyricEditor() {
+    if (!editTarget || !editTarget.editorLines) return;
+    var rows = editTarget.editorLines;
+    var seq = [];
+    var i;
+    for (i = 0; i < rows.length; i++) {
+      var t = rows[i].t === null || rows[i].t === undefined ? Infinity : rows[i].t;
+      seq.push({ entry: rows[i], t: t, at: i });
+    }
+    seq.sort(function (a, b) {
+      if (a.t !== b.t) return a.t - b.t;
+      return a.at - b.at;
+    });
+    var sorted = [];
+    for (i = 0; i < seq.length; i++) sorted.push(seq[i].entry);
+    editTarget.editorLines = sorted;
+    // Reorder the EXISTING row nodes in place: appendChild on an attached
+    // node moves it without recreating it, so focus, caret and typed values
+    // in other rows survive the resort.
+    var list = document.getElementById("lyric-rows");
+    if (!list) return;
+    for (i = 0; i < sorted.length; i++) {
+      for (var k = 0; k < list.children.length; k++) {
+        if (list.children[k]._lyricEntry === sorted[i]) {
+          list.appendChild(list.children[k]);
+          break;
+        }
+      }
+    }
+    renumberLyricRows();
+  }
+
+  function renumberLyricRows() {
+    var list = document.getElementById("lyric-rows");
+    if (!list) return;
+    for (var i = 0; i < list.children.length; i++) {
+      var row = list.children[i];
+      var time = row.querySelector(".ly-time");
+      var text = row.querySelector(".ly-text");
+      var del = row.querySelector(".ly-del");
+      if (time) time.setAttribute("aria-label", "Line " + (i + 1) + " time");
+      if (text) text.setAttribute("aria-label", "Line " + (i + 1) + " lyric");
+      if (del) del.setAttribute("aria-label", "Delete line " + (i + 1));
+    }
+  }
+
+  function buildLyricRow(entry, n) {
+    var invalid =
+      (entry.t === null || entry.t === undefined) && !!String(entry.text).trim();
+    var row = document.createElement("div");
+    row.className = "lyric-row" + (invalid ? " is-invalid" : "");
+    row._lyricEntry = entry;
+    var time = document.createElement("input");
+    time.type = "text";
+    time.className = "ly-time";
+    time.value =
+      entry.raw !== undefined && entry.raw !== null
+        ? entry.raw
+        : formatLyricTime(entry.t);
+    time.setAttribute("aria-label", "Line " + (n + 1) + " time");
+    time.setAttribute("maxlength", "12");
+    time.setAttribute("placeholder", "00:00.00");
+    time.addEventListener("change", function () {
+      var ms = parseLyricTime(time.value);
+      entry.t = ms;
+      entry.raw = time.value;
+      if (ms === null) {
+        row.classList.add("is-invalid");
+        return;
+      }
+      row.classList.remove("is-invalid");
+      resortLyricEditor();
+    });
+    var text = document.createElement("input");
+    text.type = "text";
+    text.className = "ly-text";
+    text.value = entry.text;
+    text.setAttribute("aria-label", "Line " + (n + 1) + " lyric");
+    text.addEventListener("input", function () {
+      entry.text = text.value;
+    });
+    var del = document.createElement("button");
+    del.type = "button";
+    del.className = "icon-btn ly-del";
+    del.setAttribute("aria-label", "Delete line " + (n + 1));
+    del.setAttribute("title", "Delete line");
+    setIcon(del, "x");
+    del.addEventListener("click", function () {
+      if (!editTarget || !editTarget.editorLines) return;
+      var live = editTarget.editorLines;
+      var at = live.indexOf(entry);
+      if (at !== -1) live.splice(at, 1);
+      if (row.parentNode) row.parentNode.removeChild(row);
+      renumberLyricRows();
+      refreshEditLyricsState();
+    });
+    row.appendChild(time);
+    row.appendChild(text);
+    row.appendChild(del);
+    return row;
+  }
+
+  function renderLyricEditor() {
+    var box = document.getElementById("lyrics-editor");
+    var list = document.getElementById("lyric-rows");
+    var hint = document.getElementById("lyrics-editor-hint");
+    if (!box || !list) return;
+    if (!editTarget || !editTarget.editorLines) {
+      box.hidden = true;
+      list.textContent = "";
+      if (hint) hint.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    list.textContent = "";
+    var rows = editTarget.editorLines;
+    for (var i = 0; i < rows.length; i++) {
+      list.appendChild(buildLyricRow(rows[i], i));
+    }
+    if (hint) hint.hidden = rows.length > 0;
+  }
+
+  function openEditModal(track) {
+    var uploads = window.MUSICGO_UPLOADS;
+    if (!track || !track.uploadId || !uploads || !uploads.isLocal() || !editModalEl) return;
+    uploads.get(track.uploadId).then(
+      function (record) {
+        if (!record) {
+          toast("Track not found in library");
+          return;
+        }
+        editTarget = {
+          track: track,
+          record: record,
+          pendingLyrics: null,
+          removeLyrics: false,
+          thumbURL: null,
+          editorLines: null,
+        };
+        var titleInput = document.getElementById("edit-title");
+        var artistInput = document.getElementById("edit-artist");
+        if (titleInput) titleInput.value = record.title || "";
+        if (artistInput) artistInput.value = record.artist || "";
+        var preview = document.getElementById("edit-thumb-preview");
+        if (preview) {
+          preview.removeAttribute("src");
+          var cur = trackThumb(track);
+          if (cur) preview.src = cur;
+        }
+        var keepRadio = document.getElementById("edit-src-keep");
+        if (keepRadio) keepRadio.checked = true;
+        var thumbFile = document.getElementById("edit-thumb-file");
+        if (thumbFile) thumbFile.value = "";
+        var lrcInput = document.getElementById("edit-lrc");
+        if (lrcInput) lrcInput.value = "";
+        var srcLyric = record.lyrics && record.lyrics.synced ? record.lyrics : null;
+        editTarget.editorLines = srcLyric ? cloneLyricLines(srcLyric.lines) : null;
+        refreshEditLyricsState();
+        renderLyricEditor();
+        var errorEl = document.getElementById("edit-error");
+        if (errorEl) {
+          errorEl.textContent = "";
+          errorEl.hidden = true;
+        }
+        editModalEl.hidden = false;
+        window.requestAnimationFrame(function () {
+          editModalEl.classList.add("is-open");
+        });
+        window.setTimeout(function () {
+          if (titleInput && !editModalEl.hidden) titleInput.focus();
+        }, 60);
+      },
+      function () {
+        toast("Could not open editor");
+      }
+    );
+  }
+
+  function bindEdit() {
+    var modal = editModalEl;
+    var form = document.getElementById("edit-form");
+    if (!modal || !form) return;
+    var uploads = window.MUSICGO_UPLOADS;
+    var thumbFile = document.getElementById("edit-thumb-file");
+    var preview = document.getElementById("edit-thumb-preview");
+    var srcNew = document.getElementById("edit-src-new");
+    var lrcInput = document.getElementById("edit-lrc");
+    var removeBtn = document.getElementById("edit-lyrics-remove");
+    var addLineBtn = document.getElementById("lyrics-add-line");
+    var errorEl = document.getElementById("edit-error");
+    var saveBtn = document.getElementById("edit-save");
+    var closeBtn = document.getElementById("edit-close");
+    var cancelBtn = document.getElementById("edit-cancel");
+
+    function showError(message) {
+      if (!errorEl) return;
+      errorEl.textContent = message;
+      errorEl.hidden = false;
+    }
+
+    function clearError() {
+      if (!errorEl) return;
+      errorEl.textContent = "";
+      errorEl.hidden = true;
+    }
+
+    function closeEdit() {
+      modal.classList.remove("is-open");
+      if (editTarget && editTarget.thumbURL) {
+        try {
+          window.URL.revokeObjectURL(editTarget.thumbURL);
+        } catch (e) {}
+        editTarget.thumbURL = null;
+      }
+      editTarget = null;
+      window.setTimeout(function () {
+        modal.hidden = true;
+        clearError();
+      }, 220);
+    }
+
+    if (closeBtn) closeBtn.addEventListener("click", closeEdit);
+    if (cancelBtn) cancelBtn.addEventListener("click", closeEdit);
+
+    modal.addEventListener("click", function (e) {
+      if (e.target === modal) closeEdit();
+    });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !modal.hidden) closeEdit();
+    });
+
+    if (thumbFile) {
+      thumbFile.addEventListener("change", function () {
+        if (editTarget && editTarget.thumbURL) {
+          try {
+            window.URL.revokeObjectURL(editTarget.thumbURL);
+          } catch (e) {}
+          editTarget.thumbURL = null;
+        }
+        var f = thumbFile.files && thumbFile.files[0];
+        if (!f || !editTarget || !preview) return;
+        try {
+          editTarget.thumbURL = window.URL.createObjectURL(f);
+        } catch (e) {
+          editTarget.thumbURL = null;
+        }
+        if (editTarget.thumbURL) preview.src = editTarget.thumbURL;
+        if (srcNew) srcNew.checked = true;
+      });
+    }
+
+    if (lrcInput) {
+      lrcInput.addEventListener("change", function () {
+        if (!editTarget) return;
+        var f = lrcInput.files && lrcInput.files[0];
+        editTarget.pendingLyrics = null;
+        if (!f) {
+          refreshEditLyricsState();
+          return;
+        }
+        readLrcFile(f).then(function (parsed) {
+          if (!editTarget || modal.hidden) return;
+          var cur = lrcInput.files && lrcInput.files[0];
+          if (cur !== f) return;
+          if (parsed) {
+            editTarget.pendingLyrics = parsed;
+            editTarget.removeLyrics = false;
+            editTarget.editorLines = cloneLyricLines(parsed.lines);
+            clearError();
+          } else {
+            showError("No timed lines found in .lrc");
+          }
+          refreshEditLyricsState();
+          renderLyricEditor();
+        });
+      });
+    }
+
+    if (removeBtn) {
+      removeBtn.addEventListener("click", function () {
+        if (!editTarget) return;
+        editTarget.removeLyrics = true;
+        editTarget.pendingLyrics = null;
+        editTarget.editorLines = null;
+        if (lrcInput) lrcInput.value = "";
+        refreshEditLyricsState();
+        renderLyricEditor();
+      });
+    }
+
+    var openLyricsBtn = document.getElementById("edit-lyrics-open");
+    if (openLyricsBtn) {
+      openLyricsBtn.addEventListener("click", function () {
+        if (!editTarget) return;
+        openLyricsEditor(editTarget.track, true);
+      });
+    }
+
+    if (addLineBtn) {
+      addLineBtn.addEventListener("click", function () {
+        if (!editTarget || !editTarget.editorLines) return;
+        var rows = editTarget.editorLines;
+        var nt = 0;
+        if (rows.length) {
+          var last = rows[rows.length - 1].t;
+          nt = (isFinite(last) ? last : 0) + 2000;
+        }
+        rows.push({ t: nt, text: "", raw: formatLyricTime(nt) });
+        clearError();
+        var list = document.getElementById("lyric-rows");
+        if (list) {
+          var fresh = buildLyricRow(rows[rows.length - 1], rows.length);
+          list.appendChild(fresh);
+          renumberLyricRows();
+          var box = fresh.querySelector(".ly-text");
+          if (box) box.focus();
+        }
+        refreshEditLyricsState();
+      });
+    }
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      if (!editTarget || !uploads) return;
+      clearError();
+      var titleInput = document.getElementById("edit-title");
+      var artistInput = document.getElementById("edit-artist");
+      var title = titleInput ? titleInput.value.trim() : "";
+      var artist = artistInput ? artistInput.value.trim() : "";
+      if (!title) {
+        showError("Add a title.");
+        return;
+      }
+      if (!artist) {
+        showError("Add an artist name.");
+        return;
+      }
+      var newThumb = thumbFile && thumbFile.files ? thumbFile.files[0] : null;
+      if (newThumb && newThumb.type && newThumb.type.indexOf("image/") !== 0) {
+        showError("Thumbnail must be an image.");
+        return;
+      }
+      var srcNewEl = document.getElementById("edit-src-new");
+      var useNewThumb = !!(newThumb && (!srcNewEl || srcNewEl.checked));
+      var record = editTarget.record;
+      var track = editTarget.track;
+      record.title = title;
+      record.artist = artist;
+      if (useNewThumb) record.thumbBlob = newThumb;
+      if (editTarget.removeLyrics) record.lyrics = null;
+      else if (editTarget.editorLines) {
+        var built = buildEditorLyrics(editTarget.editorLines);
+        if (built === false) {
+          renderLyricEditor();
+          showError("Time format: mm:ss.xx");
+          return;
+        }
+        record.lyrics = built;
+      } else if (editTarget.pendingLyrics) record.lyrics = editTarget.pendingLyrics;
+      if (saveBtn) saveBtn.disabled = true;
+      uploads.update(record).then(
+        function () {
+          if (saveBtn) saveBtn.disabled = false;
+          track.name = record.title;
+          track.artist = record.artist;
+          if (useNewThumb) {
+            if (track.thumb && track.thumb.indexOf("blob:") === 0) {
+              try {
+                window.URL.revokeObjectURL(track.thumb);
+              } catch (err) {}
+            }
+            try {
+              track.thumb = window.URL.createObjectURL(newThumb);
+            } catch (err) {
+              track.thumb = null;
+            }
+          }
+          track.lyrics = record.lyrics || null;
+          renderQueue();
+          var cur = currentTrack();
+          if (cur === track || (cur && track.uploadId && cur.uploadId === track.uploadId)) {
+            trackTitle.textContent = track.name;
+            trackArtist.textContent = track.artist;
+            albumArt.src = trackThumb(track);
+            syncMiniMeta();
+            syncLyricsOverlay();
+          }
+          closeEdit();
+          toast("Track updated");
+        },
+        function (err) {
+          if (saveBtn) saveBtn.disabled = false;
+          showError("Update failed: " + (err && err.message ? err.message : "storage error"));
+        }
+      );
+    });
+  }
+
+  /* ------------------------------------------------------ lyrics editor modal */
+
+  function updateLyricWordsPreview() {
+    var el = document.getElementById("lyrics-words-preview");
+    if (!el) return;
+    var count = 0;
+    var stamps = [];
+    if (editTarget && editTarget.editorLines) {
+      var rows = editTarget.editorLines;
+      for (var i = 0; i < rows.length; i++) {
+        var w = rows[i].words;
+        if (!w) continue;
+        for (var j = 0; j < w.length; j++) {
+          if (stamps.length < 3) stamps.push(formatLyricTime(w[j].t));
+          count++;
+        }
+      }
+    }
+    if (!count) {
+      el.hidden = true;
+      el.textContent = "";
+      return;
+    }
+    el.hidden = false;
+    el.textContent =
+      count +
+      (count === 1 ? " word" : " words") +
+      " · " +
+      stamps.join(", ") +
+      (count > stamps.length ? ", …" : "");
+  }
+
+  function openLyricsEditor(track, fromEdit) {
+    var uploads = window.MUSICGO_UPLOADS;
+    if (!track || !track.uploadId || !uploads || !uploads.isLocal() || !lyricsEditorModalEl)
+      return;
+    function proceed(t, record) {
+      if (!editTarget || editTarget.track !== t) {
+        editTarget = {
+          track: t,
+          record: record,
+          pendingLyrics: null,
+          removeLyrics: false,
+          thumbURL: null,
+          editorLines: null,
+        };
+      } else {
+        editTarget.record = record;
+      }
+      var src = editTarget.removeLyrics
+        ? null
+        : editTarget.pendingLyrics || record.lyrics;
+      editTarget.editorLines = src && src.synced ? cloneLyricLines(src.lines) : [];
+      editTarget.lyricsReturnEdit = !!fromEdit && !!editModalEl && !editModalEl.hidden;
+      if (editTarget.lyricsReturnEdit) {
+        editModalEl.classList.remove("is-open");
+        editModalEl.hidden = true;
+      }
+      refreshEditLyricsState();
+      renderLyricEditor();
+      updateLyricWordsPreview();
+      var errorEl = document.getElementById("lyrics-editor-error");
+      if (errorEl) {
+        errorEl.textContent = "";
+        errorEl.hidden = true;
+      }
+      var meta = document.getElementById("lyrics-editor-meta");
+      if (meta) meta.textContent = t.name + " · " + t.artist;
+      lyricsEditorModalEl.hidden = false;
+      window.requestAnimationFrame(function () {
+        lyricsEditorModalEl.classList.add("is-open");
+      });
+      window.setTimeout(function () {
+        if (lyricsEditorModalEl.hidden) return;
+        var first = document.querySelector("#lyric-rows .ly-time");
+        if (first) first.focus();
+      }, 60);
+    }
+    if (editTarget && editTarget.track === track && editTarget.record) {
+      proceed(track, editTarget.record);
+    } else {
+      uploads.get(track.uploadId).then(
+        function (record) {
+          if (!record) {
+            toast("Track not found in library");
+            return;
+          }
+          proceed(track, record);
+        },
+        function () {
+          toast("Could not open lyrics editor");
+        }
+      );
+    }
+  }
+
+  function closeLyricsEditor(saved) {
+    if (!lyricsEditorModalEl) return;
+    lyricsEditorModalEl.classList.remove("is-open");
+    if (!saved && editTarget) editTarget.editorLines = null;
+    window.setTimeout(function () {
+      lyricsEditorModalEl.hidden = true;
+    }, 220);
+    if (editTarget && editTarget.lyricsReturnEdit && editModalEl) {
+      editTarget.lyricsReturnEdit = false;
+      editModalEl.hidden = false;
+      window.requestAnimationFrame(function () {
+        editModalEl.classList.add("is-open");
+      });
+    }
+  }
+
+  function bindLyricsEditor() {
+    var modal = lyricsEditorModalEl;
+    var form = document.getElementById("lyrics-editor-form");
+    if (!modal || !form) return;
+    var uploads = window.MUSICGO_UPLOADS;
+    var errorEl = document.getElementById("lyrics-editor-error");
+    var saveBtn = document.getElementById("lyrics-editor-save");
+    var closeBtn = document.getElementById("lyrics-editor-close");
+    var cancelBtn = document.getElementById("lyrics-editor-cancel");
+
+    function showError(message) {
+      if (!errorEl) return;
+      errorEl.textContent = message;
+      errorEl.hidden = false;
+    }
+
+    function clearError() {
+      if (!errorEl) return;
+      errorEl.textContent = "";
+      errorEl.hidden = true;
+    }
+
+    if (closeBtn)
+      closeBtn.addEventListener("click", function () {
+        closeLyricsEditor(false);
+      });
+    if (cancelBtn)
+      cancelBtn.addEventListener("click", function () {
+        closeLyricsEditor(false);
+      });
+
+    modal.addEventListener("click", function (e) {
+      if (e.target === modal) closeLyricsEditor(false);
+    });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !modal.hidden) closeLyricsEditor(false);
+    });
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      if (!editTarget || !uploads) return;
+      clearError();
+      var built = buildEditorLyrics(editTarget.editorLines || []);
+      if (built === false) {
+        renderLyricEditor();
+        showError("Time format: mm:ss.xx");
+        return;
+      }
+      var record = editTarget.record;
+      var track = editTarget.track;
+      record.lyrics = built;
+      if (saveBtn) saveBtn.disabled = true;
+      uploads.update(record).then(
+        function () {
+          if (saveBtn) saveBtn.disabled = false;
+          track.lyrics = record.lyrics || null;
+          editTarget.pendingLyrics = record.lyrics;
+          editTarget.removeLyrics = !record.lyrics;
+          refreshEditLyricsState();
+          updateLyricWordsPreview();
+          var cur = currentTrack();
+          if (cur === track || (cur && track.uploadId && cur.uploadId === track.uploadId)) {
+            syncLyricsOverlay();
+          }
+          closeLyricsEditor(true);
+          toast("Lyrics updated");
+        },
+        function (err) {
+          if (saveBtn) saveBtn.disabled = false;
+          showError("Update failed: " + (err && err.message ? err.message : "storage error"));
+        }
+      );
     });
   }
 
@@ -1699,6 +2604,8 @@
     bindLyricsSize();
     bindEvents();
     bindUpload();
+    bindEdit();
+    bindLyricsEditor();
     bindHelp();
     applyBgPreference();
 

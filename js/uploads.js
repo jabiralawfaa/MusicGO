@@ -456,6 +456,125 @@
     return t ? t : null;
   }
 
+  /* Parse .lrc text into {synced: true, lines: [{t, text}]} — same shape as
+     the SYLT path of buildLyrics so the overlay consumes it unchanged.
+     Supports [mm:ss.xx] / [mm:ss.xxx] / [mm:ss], several stamps per line,
+     [offset:±ms] shifting (clamped ≥ 0); [ti:]/[ar:]/[al:]/[au:]/[by:]/
+     [length:] and other metadata lines are ignored. Empty-text entries are
+     dropped. Caps at 800 lines / 20000 chars. Returns null when no valid
+     timed line found.
+     Word-level timestamps: `[mm:ss.xx]<mm:ss.xx>Word1 <mm:ss.xx>Word2`
+     yields words: [{t, text}] on the line entry (line .t = first [] stamp);
+     lines without <> carry no `words` field (plain behavior unchanged).
+     Word total is capped at 8000 (truncated beyond). */
+  function lrcStampMs(min, sec, frac) {
+    var ms = parseInt(min, 10) * 60000 + parseInt(sec, 10) * 1000;
+    frac = frac || "";
+    if (frac.length === 1) ms += parseInt(frac, 10) * 100;
+    else if (frac.length === 2) ms += parseInt(frac, 10) * 10;
+    else if (frac.length === 3) ms += parseInt(frac, 10);
+    return ms;
+  }
+
+  function parseLrcWords(text, lineMs, offset) {
+    var wordRe = /<(\d+):(\d{2})(?:\.(\d{1,3}))?>/g;
+    var m = wordRe.exec(text);
+    if (!m) return { text: String(text).trim(), words: null };
+    var words = [];
+    var lead = text.slice(0, m.index).trim();
+    if (lead) words.push({ t: lineMs, text: lead });
+    while (m) {
+      var wms = lrcStampMs(m[1], m[2], m[3]) + offset;
+      if (wms < 0) wms = 0;
+      var start = m.index + m[0].length;
+      var nm = wordRe.exec(text);
+      var chunk = (nm ? text.slice(start, nm.index) : text.slice(start)).trim();
+      if (chunk) words.push({ t: wms, text: chunk });
+      m = nm;
+    }
+    words.sort(function (a, b) {
+      return a.t - b.t;
+    });
+    var plain = String(text)
+      .replace(/<\d+:\d{2}(?:\.\d{1,3})?>/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return { text: plain, words: words.length ? words : null };
+  }
+
+  function parseLrc(text) {
+    if (text === null || text === undefined) return null;
+    var src = String(text).replace(/^\uFEFF/, "");
+    src = src.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    var raw = src.split("\n");
+    var offset = 0;
+    var out = [];
+    var total = 0;
+    var wordTotal = 0;
+    var i, j;
+    var stampRe = /\[(\d+):(\d{2})(?:\.(\d{1,3}))?\]/g;
+    for (i = 0; i < raw.length; i++) {
+      var line = raw[i];
+      var mOff = line.match(/\[offset:\s*([+-]?\d+)\s*\]/i);
+      if (mOff) {
+        offset = parseInt(mOff[1], 10) || 0;
+        continue;
+      }
+      var core = line.replace(/^(\[(?:ti|ar|al|au|by|length):[^\]]*\])+/i, "");
+      var tm = core.match(/^((?:\[\d+:\d{2}(?:\.\d{1,3})?\])+)(.*)$/);
+      if (!tm) continue;
+      var stamps = [];
+      var m;
+      stampRe.lastIndex = 0;
+      while ((m = stampRe.exec(tm[1])) !== null) {
+        stamps.push(lrcStampMs(m[1], m[2], m[3]));
+      }
+      if (!stamps.length) continue;
+      var baseMs = stamps[0] + offset;
+      if (baseMs < 0) baseMs = 0;
+      var parsed = parseLrcWords(tm[2], baseMs, offset);
+      if (!parsed.text) continue;
+      var words = parsed.words;
+      if (words) {
+        if (wordTotal >= 8000) words = null;
+        else {
+          if (words.length > 8000 - wordTotal) words.length = 8000 - wordTotal;
+          if (!words.length) words = null;
+          else wordTotal += words.length;
+        }
+      }
+      var lyricText = parsed.text;
+      for (j = 0; j < stamps.length; j++) {
+        if (out.length >= 800 || total >= 20000) break;
+        var t = stamps[j] + offset;
+        if (t < 0) t = 0;
+        var room = 20000 - total;
+        if (room <= 0) break;
+        var txt = lyricText;
+        var cut = false;
+        if (txt.length > room) {
+          txt = txt.slice(0, room);
+          cut = true;
+        }
+        if (!txt) break;
+        var entry = { t: t, text: txt };
+        if (words && !cut) {
+          entry.words = words.map(function (w) {
+            return { t: w.t, text: w.text };
+          });
+        }
+        out.push(entry);
+        total += txt.length;
+      }
+      if (out.length >= 800 || total >= 20000) break;
+    }
+    if (!out.length) return null;
+    out.sort(function (a, b) {
+      return a.t - b.t;
+    });
+    return { synced: true, lines: out };
+  }
+
   function buildLyrics(buf) {
     var tag = parseTag(buf);
     if (!tag) return null;
@@ -586,12 +705,50 @@
     });
   }
 
+  /* Fetch one stored track record by id. Resolves record or null. */
+  function getRecord(id) {
+    return openDb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction([TRACKS], "readonly");
+        var req = tx.objectStore(TRACKS).get(id);
+        req.onsuccess = function () {
+          resolve(req.result || null);
+        };
+        req.onerror = function () {
+          reject(req.error || new Error("get failed"));
+        };
+      });
+    });
+  }
+
+  /* Overwrite one stored track record (same id). Resolves the record. */
+  function updateRecord(record) {
+    return openDb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction([TRACKS], "readwrite");
+        tx.objectStore(TRACKS).put(record);
+        tx.oncomplete = function () {
+          resolve(record);
+        };
+        tx.onerror = function () {
+          reject(tx.error || new Error("update failed"));
+        };
+        tx.onabort = function () {
+          reject(tx.error || new Error("update aborted"));
+        };
+      });
+    });
+  }
+
   global.MUSICGO_UPLOADS = {
     isLocal: isLocal,
     hydrate: hydrate,
     save: save,
+    get: getRecord,
+    update: updateRecord,
     extractCover: extractCover,
     extractLyrics: extractLyrics,
     extractMedia: extractMedia,
+    parseLrc: parseLrc,
   };
 })(window);
