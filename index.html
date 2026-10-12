@@ -47,6 +47,7 @@
         <source id="bg-source" src="videos/wallpaper1.mp4" type="video/mp4" />
         Sorry, your browser does not support background video.
       </video>
+      <img class="bg-image" id="bg-image" src="images/img1.jpg" alt="" hidden />
       <div class="bg-scrim"></div>
     </div>
 
@@ -107,6 +108,15 @@
             title="Theme"
           ></button>
         </div>
+        <button
+          type="button"
+          class="icon-btn"
+          id="nav-toggle"
+          data-icon="menu"
+          aria-label="Menu"
+          aria-expanded="false"
+          title="Menu"
+        ></button>
       </header>
 
       <main class="layout">
@@ -254,7 +264,18 @@
           <div class="card queue-card reveal" style="--d: 0.3s">
             <div class="queue-head">
               <span class="queue-title"><span data-icon="list-music"></span>Queue</span>
-              <span class="queue-count"><span id="track-count">0</span> tracks</span>
+              <span class="queue-side">
+                <span class="queue-count"><span id="track-count">0</span> tracks</span>
+                <button
+                  type="button"
+                  class="icon-btn sm"
+                  id="playlist-edit"
+                  data-icon="pencil"
+                  aria-label="Edit playlist"
+                  title="Edit playlist"
+                  hidden
+                ></button>
+              </span>
             </div>
 
             <div class="tabs" id="playlist-tabs" aria-label="Choose a playlist"></div>
@@ -279,6 +300,8 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <div class="nav-scrim" id="nav-scrim" hidden></div>
 
 <div class="mini-bar" id="mini-bar" hidden aria-label="Mini player">
   <div class="mini-meta">
@@ -426,6 +449,16 @@
           <input type="file" id="edit-thumb-file" name="thumb" accept="image/*" />
         </div>
 
+        <div class="field" id="edit-bg-field">
+          <span class="field-label" id="edit-bg-label">Background <em>(this track)</em></span>
+          <div class="cover-choices bg-choices" id="edit-bg-choices" role="radiogroup" aria-labelledby="edit-bg-label"></div>
+          <div class="bg-preview" id="edit-bg-preview-wrap" hidden>
+            <img class="bg-preview-media" id="edit-bg-preview" src="images/img1.jpg" alt="" />
+            <video class="bg-preview-media" id="edit-bg-preview-video" muted loop playsinline preload="metadata" hidden></video>
+          </div>
+          <input type="file" id="edit-bg-file" name="bg" accept="image/*" hidden />
+        </div>
+
         <div class="field" id="edit-lyrics-field">
           <span class="field-label">Lyrics</span>
           <div class="edit-lyrics-status">
@@ -446,6 +479,44 @@
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" id="edit-cancel">Cancel</button>
           <button type="submit" class="btn btn-primary" id="edit-save">Save</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="modal-backdrop" id="playlist-modal" hidden>
+      <form class="modal" id="playlist-form" aria-label="Edit playlist">
+        <div class="modal-head">
+          <h2 class="modal-title">Edit playlist</h2>
+          <button
+            type="button"
+            class="icon-btn"
+            id="playlist-close"
+            data-icon="x"
+            aria-label="Close playlist editor"
+            title="Close"
+          ></button>
+        </div>
+
+        <label class="field">
+          <span class="field-label">Name</span>
+          <input type="text" id="playlist-name" name="name" maxlength="60" />
+        </label>
+
+        <div class="field" id="playlist-bg-field">
+          <span class="field-label" id="playlist-bg-label">Background</span>
+          <div class="cover-choices bg-choices" id="playlist-bg-choices" role="radiogroup" aria-labelledby="playlist-bg-label"></div>
+          <div class="bg-preview" id="playlist-bg-preview-wrap" hidden>
+            <img class="bg-preview-media" id="playlist-bg-preview" src="images/img1.jpg" alt="" />
+            <video class="bg-preview-media" id="playlist-bg-preview-video" muted loop playsinline preload="metadata" hidden></video>
+          </div>
+          <input type="file" id="playlist-bg-file" name="bg" accept="image/*" hidden />
+        </div>
+
+        <p class="form-error" id="playlist-error" hidden></p>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="playlist-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="playlist-save">Save</button>
         </div>
       </form>
     </div>

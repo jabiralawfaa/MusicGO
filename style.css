@@ -161,6 +161,29 @@ button {
     linear-gradient(180deg, var(--scrim-top) 0%, var(--scrim-bottom) 100%);
 }
 
+.bg-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+
+.bg-stage.has-image .bg-image {
+  opacity: 1;
+}
+
+.bg-stage.has-image .bg-video {
+  opacity: 0;
+}
+
+.bg-stage.is-off .bg-image {
+  opacity: 0;
+}
+
 /* ------------------------------------------------------------------ shell */
 
 .app {
@@ -795,6 +818,13 @@ input[type="range"]::-moz-range-thumb {
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--fg-muted);
+}
+
+.queue-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .tabs {
@@ -1851,6 +1881,55 @@ body.is-minimized .app {
   visibility: hidden;
 }
 
+/* ------------------------------------------------- background picker */
+
+.bg-choices {
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+}
+
+.bg-choices .cover-choice {
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.bg-choices .cover-choice span:last-child {
+  text-align: center;
+}
+
+.bg-thumb {
+  width: 100%;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--surface-2);
+  display: block;
+}
+
+.bg-preview {
+  margin-top: 10px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+}
+
+.bg-preview-media {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  object-fit: cover;
+  background: var(--surface-2);
+}
+
+#edit-bg-file,
+#playlist-bg-file {
+  margin-top: 10px;
+}
+
 /* --------------------------------------------- minimized karaoke lyrics */
 
 #lyrics-align-btn,
@@ -2039,5 +2118,143 @@ body.is-minimized #lyrics-size-inc {
 
   .ly-word.sweep::after {
     display: none;
+  }
+}
+
+/* ---------------------------------------------------- mobile nav drawer */
+
+#nav-toggle {
+  display: none;
+  flex-shrink: 0;
+}
+
+#nav-scrim {
+  position: fixed;
+  top: 64px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 44;
+  background: rgba(8, 8, 30, 0.55);
+}
+
+@keyframes nav-in {
+  from {
+    transform: translateX(102%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes nav-out {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(102%);
+  }
+}
+
+@keyframes nav-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 768px) {
+  #nav-toggle {
+    display: inline-grid;
+    position: relative;
+    z-index: 46;
+  }
+
+  /* .app creates a stacking context (z-index: 1) that would trap the
+     drawer + hamburger below the body-level scrim — lift it while open */
+  body.nav-open .app {
+    z-index: auto;
+  }
+
+  .topbar-actions {
+    position: fixed;
+    top: 64px;
+    right: 0;
+    bottom: 0;
+    z-index: 45;
+    width: min(300px, 84vw);
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 6px;
+    padding: 16px 16px 24px;
+    background: var(--surface-solid);
+    border: 1px solid var(--border-strong);
+    border-right: none;
+    border-radius: 16px 0 0 16px;
+    box-shadow: var(--shadow-pop);
+    overflow-y: auto;
+  }
+
+  body.nav-open .topbar-actions {
+    display: flex;
+    animation: nav-in 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  body.nav-closing .topbar-actions {
+    display: flex;
+    animation: nav-out 0.24s ease forwards;
+  }
+
+  body.nav-open #nav-scrim,
+  body.nav-closing #nav-scrim {
+    display: block;
+    animation: nav-fade 0.25s ease;
+  }
+
+  body.nav-open {
+    overflow: hidden;
+  }
+
+  body.nav-open .topbar-actions .icon-btn,
+  body.nav-closing .topbar-actions .icon-btn {
+    width: 100%;
+    min-height: 46px;
+    display: grid;
+    grid-template-columns: 20px 1fr;
+    place-items: center start;
+    gap: 12px;
+    padding: 0 14px;
+    border-radius: 12px;
+    border-color: transparent;
+  }
+
+  body.nav-open .topbar-actions .icon-btn svg,
+  body.nav-closing .topbar-actions .icon-btn svg {
+    width: 17px;
+    height: 17px;
+    flex-shrink: 0;
+  }
+
+  body.nav-open .topbar-actions .icon-btn::after,
+  body.nav-closing .topbar-actions .icon-btn::after {
+    content: attr(aria-label);
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.nav-open .topbar-actions,
+  body.nav-closing .topbar-actions,
+  body.nav-open #nav-scrim,
+  body.nav-closing #nav-scrim {
+    animation: none;
   }
 }

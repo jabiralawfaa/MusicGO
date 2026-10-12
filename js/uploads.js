@@ -68,7 +68,23 @@
       thumb: record.thumbBlob ? global.URL.createObjectURL(record.thumbBlob) : null,
       uploadId: record.id,
       lyrics: record.lyrics || null,
+      bg: memoryBg(record.bg),
     };
+  }
+
+  /* Stored bg shape: null | {kind:"preset", id} | {kind:"upload", blob}.
+     Memory shape:    null | {kind:"preset", id} | {kind:"upload", url}. */
+  function memoryBg(stored) {
+    if (!stored) return null;
+    if (stored.kind === "preset" && stored.id) return { kind: "preset", id: stored.id };
+    if (stored.kind === "upload" && stored.blob) {
+      try {
+        return { kind: "upload", url: global.URL.createObjectURL(stored.blob) };
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
   }
 
   /* Merge stored playlists + tracks into the in-memory PLAYLISTS array.
@@ -90,8 +106,12 @@
         defs.forEach(function (def) {
           if (!byId[def.id]) {
             var pl = { id: def.id, label: def.label, bgVideo: "videos/wallpaper1.mp4", tracks: [] };
+            if (def.bg !== undefined) pl.bg = memoryBg(def.bg);
             playlists.push(pl);
             byId[pl.id] = pl;
+          } else {
+            if (def.label) byId[def.id].label = def.label;
+            if (def.bg !== undefined) byId[def.id].bg = memoryBg(def.bg);
           }
         });
 
@@ -120,7 +140,7 @@
   }
 
   /* Persist one uploaded song (+ its playlist def when created).
-     entry: { title, artist, playlistId, playlistLabel, isNewPlaylist, audioBlob, thumbBlob, lyrics }
+     entry: { title, artist, playlistId, playlistLabel, isNewPlaylist, audioBlob, thumbBlob, lyrics, bg }
      Returns Promise<record> (record.id / record.title / record.artist / blobs). */
   function save(entry) {
     var record = {
@@ -131,6 +151,7 @@
       audioBlob: entry.audioBlob,
       thumbBlob: entry.thumbBlob || null,
       lyrics: entry.lyrics || null,
+      bg: entry.bg || null,
       addedAt: Date.now(),
     };
 
@@ -740,12 +761,57 @@
     });
   }
 
+  /* Fetch one stored playlist def by id. Resolves def or null. */
+  function getPlaylistDef(id) {
+    return openDb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction([PLISTS], "readonly");
+        var req = tx.objectStore(PLISTS).get(id);
+        req.onsuccess = function () {
+          resolve(req.result || null);
+        };
+        req.onerror = function () {
+          reject(req.error || new Error("get failed"));
+        };
+      });
+    });
+  }
+
+  /* Create or overwrite one stored playlist def.
+     def: { id, label, bg, addedAt }. Resolves the def. */
+  function savePlaylistDef(def) {
+    var stored = {
+      id: def.id,
+      label: def.label,
+      bg: def.bg === undefined ? null : def.bg,
+      addedAt: def.addedAt || Date.now(),
+    };
+    return openDb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction([PLISTS], "readwrite");
+        tx.objectStore(PLISTS).put(stored);
+        tx.oncomplete = function () {
+          resolve(stored);
+        };
+        tx.onerror = function () {
+          reject(tx.error || new Error("save failed"));
+        };
+        tx.onabort = function () {
+          reject(tx.error || new Error("save aborted"));
+        };
+      });
+    });
+  }
+
   global.MUSICGO_UPLOADS = {
     isLocal: isLocal,
     hydrate: hydrate,
     save: save,
     get: getRecord,
     update: updateRecord,
+    getPlaylist: getPlaylistDef,
+    savePlaylist: savePlaylistDef,
+    memoryBg: memoryBg,
     extractCover: extractCover,
     extractLyrics: extractLyrics,
     extractMedia: extractMedia,

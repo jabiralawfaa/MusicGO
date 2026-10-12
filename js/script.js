@@ -4,6 +4,88 @@
   var PLAYLISTS = window.MUSICGO_PLAYLISTS || [];
   var ICONS = window.MUSICGO_ICONS;
   var FALLBACK_IMG = "images/img1.jpg";
+
+  var BG_PRESETS = [
+    { id: "wallpaper1", kind: "video", src: "videos/wallpaper1.mp4", label: "Nebula Drift" },
+    { id: "wallpaper2", kind: "video", src: "videos/wallpaper2.mp4", label: "Midnight Wave" },
+    { id: "wallpaper3", kind: "video", src: "videos/wallpaper3.mp4", label: "Aurora Field" },
+    { id: "yoasobi", kind: "image", src: "images/yoasobi.jpg", label: "Yoasobi" },
+    { id: "hololive", kind: "image", src: "images/hololive.jpg", label: "Hololive" },
+    { id: "hoshino", kind: "image", src: "images/hoshino.jpg", label: "Hoshino" },
+    { id: "mash", kind: "image", src: "images/mash.jpg", label: "Mash" },
+    { id: "my-idol", kind: "image", src: "images/my-idol.jpg", label: "My Idol" },
+    { id: "img1", kind: "image", src: "images/img1.jpg", label: "Ember" },
+  ];
+
+  var BG_UPLOAD_MAX = 10 * 1024 * 1024;
+
+  function findBgPreset(id) {
+    for (var i = 0; i < BG_PRESETS.length; i++) {
+      if (BG_PRESETS[i].id === id) return BG_PRESETS[i];
+    }
+    return null;
+  }
+
+  /* Stored bg: null | {kind:"preset", id} | {kind:"upload", blob}.
+     Memory bg: null | {kind:"preset", id} | {kind:"upload", url}.
+     Resolves to {media:"video"|"image", src} or null (legacy path). */
+  function bgUrlFor(sel) {
+    if (!sel) return null;
+    if (sel.kind === "preset") {
+      var p = findBgPreset(sel.id);
+      if (!p) return null;
+      return { media: p.kind, src: p.src };
+    }
+    if (sel.kind === "upload" && sel.url) return { media: "image", src: sel.url };
+    return null;
+  }
+
+  function resolveTrackBg(track) {
+    if (track && track.bg) return track.bg;
+    if (state.playlist && state.playlist.bg) return state.playlist.bg;
+    return null;
+  }
+
+  function revokeBgUrl(bg) {
+    if (bg && bg.kind === "upload" && bg.url && bg.url.indexOf("blob:") === 0) {
+      try {
+        window.URL.revokeObjectURL(bg.url);
+      } catch (e) {}
+    }
+  }
+
+  function showBgImage(src) {
+    if (!bgImage) return;
+    if (bgImage.getAttribute("src") !== src) bgImage.src = src;
+    bgImage.hidden = false;
+    if (bgStage) bgStage.classList.add("has-image");
+    if (bgVideo) {
+      try {
+        bgVideo.pause();
+      } catch (e) {}
+    }
+  }
+
+  function hideBgImage() {
+    if (bgImage) bgImage.hidden = true;
+    if (bgStage) bgStage.classList.remove("has-image");
+  }
+
+  function applyBackground() {
+    var track = currentTrack();
+    var res = bgUrlFor(resolveTrackBg(track));
+    if (!res) {
+      hideBgImage();
+      setBgVideo(trackBgVideo(track));
+      return;
+    }
+    if (res.media === "video") {
+      hideBgImage();
+      setBgVideo(res.src);
+    } else {
+      showBgImage(res.src);
+    }
+  }
   var RING_C = 2 * Math.PI * 49;
   var STORE_PREFIX = "musicgo-";
 
@@ -85,11 +167,13 @@
   var bgStage = document.getElementById("bg-stage");
   var bgVideo = document.getElementById("bg-video");
   var bgSource = document.getElementById("bg-source");
+  var bgImage = document.getElementById("bg-image");
   var canvas = document.getElementById("visualizer");
   var uploadModalEl = document.getElementById("upload-modal");
   var helpModalEl = document.getElementById("help-modal");
   var editModalEl = document.getElementById("edit-modal");
   var lyricsEditorModalEl = document.getElementById("lyrics-editor-modal");
+  var playlistModalEl = document.getElementById("playlist-modal");
   var minimizeBtn = document.getElementById("minimize-btn");
   var miniBar = document.getElementById("mini-bar");
   var miniThumb = document.getElementById("mini-thumb");
@@ -122,7 +206,8 @@
       (uploadModalEl && !uploadModalEl.hidden) ||
       (helpModalEl && !helpModalEl.hidden) ||
       (editModalEl && !editModalEl.hidden) ||
-      (lyricsEditorModalEl && !lyricsEditorModalEl.hidden)
+      (lyricsEditorModalEl && !lyricsEditorModalEl.hidden) ||
+      (playlistModalEl && !playlistModalEl.hidden)
     );
   }
 
@@ -521,8 +606,10 @@
       bgStage.classList.remove("is-off");
       setIcon(bgToggle, "video");
       bgToggle.setAttribute("aria-pressed", "true");
-      var p = bgVideo.play();
-      if (p && p.catch) p.catch(function () {});
+      if (!bgStage.classList.contains("has-image")) {
+        var p = bgVideo.play();
+        if (p && p.catch) p.catch(function () {});
+      }
     }
   }
 
@@ -749,7 +836,7 @@
     audio.src = trackSrc(track);
     audio.load();
 
-    setBgVideo(trackBgVideo(track));
+    applyBackground();
 
     resetProgress();
     markQueueActive();
@@ -1814,6 +1901,7 @@
               thumb: record.thumbBlob ? window.URL.createObjectURL(record.thumbBlob) : null,
               uploadId: record.id,
               lyrics: record.lyrics || null,
+              bg: null,
             };
 
             var target = findPlaylist(targetId);
@@ -2071,6 +2159,128 @@
     if (hint) hint.hidden = rows.length > 0;
   }
 
+  /* ----------------------------------------------- background picker (shared) */
+
+  function buildBgPicker(groupEl, groupName, selectedValue, defaultLabel) {
+    if (!groupEl) return;
+    groupEl.innerHTML = "";
+    function addOption(value, label, thumb) {
+      var lab = document.createElement("label");
+      lab.className = "cover-choice";
+      var input = document.createElement("input");
+      input.type = "radio";
+      input.name = groupName;
+      input.value = value;
+      if (value === selectedValue) input.checked = true;
+      lab.appendChild(input);
+      if (thumb) lab.appendChild(thumb);
+      var span = document.createElement("span");
+      span.textContent = label;
+      lab.appendChild(span);
+      groupEl.appendChild(lab);
+      return input;
+    }
+    addOption("", defaultLabel, null);
+    BG_PRESETS.forEach(function (p) {
+      var thumb;
+      if (p.kind === "video") {
+        thumb = document.createElement("video");
+        thumb.className = "bg-thumb";
+        thumb.src = p.src;
+        thumb.muted = true;
+        thumb.playsInline = true;
+        thumb.preload = "metadata";
+      } else {
+        thumb = document.createElement("img");
+        thumb.className = "bg-thumb";
+        thumb.src = p.src;
+        thumb.alt = "";
+        thumb.loading = "lazy";
+      }
+      addOption(p.id, p.label, thumb);
+    });
+    addOption("__upload", "Upload image…", null);
+  }
+
+  function bgGroupValue(groupEl, groupName) {
+    if (!groupEl) return "";
+    var checked = groupEl.querySelector('input[name="' + groupName + '"]:checked');
+    return checked ? checked.value : "";
+  }
+
+  function checkBgUploadRadio(groupEl, groupName) {
+    if (!groupEl) return;
+    var input = groupEl.querySelector('input[name="' + groupName + '"][value="__upload"]');
+    if (input) input.checked = true;
+  }
+
+  function paintBgPreview(ids, res) {
+    var wrap = document.getElementById(ids.wrap);
+    var img = document.getElementById(ids.img);
+    var vid = document.getElementById(ids.vid);
+    if (!wrap) return;
+    if (!res) {
+      wrap.hidden = true;
+      return;
+    }
+    wrap.hidden = false;
+    if (res.media === "video") {
+      if (img) img.hidden = true;
+      if (vid) {
+        vid.hidden = false;
+        if (vid.getAttribute("src") !== res.src) vid.src = res.src;
+        try {
+          var pr = vid.play();
+          if (pr && pr.catch) pr.catch(function () {});
+        } catch (e) {}
+      }
+    } else {
+      if (vid) {
+        try {
+          vid.pause();
+        } catch (e) {}
+        vid.hidden = true;
+      }
+      if (img) {
+        img.hidden = false;
+        if (img.getAttribute("src") !== res.src) img.src = res.src;
+      }
+    }
+  }
+
+  function editBgSelection() {
+    return bgGroupValue(document.getElementById("edit-bg-choices"), "edit-bg-src");
+  }
+
+  function refreshEditBgPreview() {
+    if (!editTarget) return;
+    var sel = editBgSelection();
+    var fileEl = document.getElementById("edit-bg-file");
+    if (fileEl) fileEl.hidden = sel !== "__upload";
+    var res = null;
+    if (sel && sel !== "__upload") {
+      res = bgUrlFor({ kind: "preset", id: sel });
+    } else if (sel === "__upload") {
+      if (editTarget.bgURL) res = { media: "image", src: editTarget.bgURL };
+      else if (
+        editTarget.record.bg &&
+        editTarget.record.bg.kind === "upload" &&
+        editTarget.track.bg &&
+        editTarget.track.bg.url
+      ) {
+        res = { media: "image", src: editTarget.track.bg.url };
+      }
+    } else {
+      var pl = editTarget.record.playlistId ? findPlaylist(editTarget.record.playlistId) : null;
+      if (pl && pl.bg) res = bgUrlFor(pl.bg);
+      if (!res) res = { media: "video", src: trackBgVideo(editTarget.track) };
+    }
+    paintBgPreview(
+      { wrap: "edit-bg-preview-wrap", img: "edit-bg-preview", vid: "edit-bg-preview-video" },
+      res
+    );
+  }
+
   function openEditModal(track) {
     var uploads = window.MUSICGO_UPLOADS;
     if (!track || !track.uploadId || !uploads || !uploads.isLocal() || !editModalEl) return;
@@ -2087,6 +2297,8 @@
           removeLyrics: false,
           thumbURL: null,
           editorLines: null,
+          bgFile: null,
+          bgURL: null,
         };
         var titleInput = document.getElementById("edit-title");
         var artistInput = document.getElementById("edit-artist");
@@ -2104,6 +2316,20 @@
         if (thumbFile) thumbFile.value = "";
         var lrcInput = document.getElementById("edit-lrc");
         if (lrcInput) lrcInput.value = "";
+        var recBg = record.bg;
+        var bgSel =
+          recBg && recBg.kind === "preset"
+            ? recBg.id
+            : recBg && recBg.kind === "upload"
+              ? "__upload"
+              : "";
+        buildBgPicker(document.getElementById("edit-bg-choices"), "edit-bg-src", bgSel, "Playlist default");
+        var bgFileEl = document.getElementById("edit-bg-file");
+        if (bgFileEl) {
+          bgFileEl.value = "";
+          bgFileEl.hidden = bgSel !== "__upload";
+        }
+        refreshEditBgPreview();
         var srcLyric = record.lyrics && record.lyrics.synced ? record.lyrics : null;
         editTarget.editorLines = srcLyric ? cloneLyricLines(srcLyric.lines) : null;
         refreshEditLyricsState();
@@ -2162,6 +2388,12 @@
           window.URL.revokeObjectURL(editTarget.thumbURL);
         } catch (e) {}
         editTarget.thumbURL = null;
+      }
+      if (editTarget && editTarget.bgURL) {
+        try {
+          window.URL.revokeObjectURL(editTarget.bgURL);
+        } catch (e) {}
+        editTarget.bgURL = null;
       }
       editTarget = null;
       window.setTimeout(function () {
@@ -2225,6 +2457,33 @@
           refreshEditLyricsState();
           renderLyricEditor();
         });
+      });
+    }
+
+    var bgChoices = document.getElementById("edit-bg-choices");
+    var bgFile = document.getElementById("edit-bg-file");
+    if (bgChoices) {
+      bgChoices.addEventListener("change", function () {
+        refreshEditBgPreview();
+      });
+    }
+    if (bgFile) {
+      bgFile.addEventListener("change", function () {
+        if (editTarget && editTarget.bgURL) {
+          try {
+            window.URL.revokeObjectURL(editTarget.bgURL);
+          } catch (e) {}
+          editTarget.bgURL = null;
+        }
+        var f = bgFile.files && bgFile.files[0];
+        if (!f || !editTarget) return;
+        try {
+          editTarget.bgURL = window.URL.createObjectURL(f);
+        } catch (e) {
+          editTarget.bgURL = null;
+        }
+        checkBgUploadRadio(bgChoices, "edit-bg-src");
+        refreshEditBgPreview();
       });
     }
 
@@ -2292,6 +2551,15 @@
         showError("Thumbnail must be an image.");
         return;
       }
+      var newBgFile = bgFile && bgFile.files ? bgFile.files[0] : null;
+      if (newBgFile && newBgFile.type && newBgFile.type.indexOf("image/") !== 0) {
+        showError("Background must be an image.");
+        return;
+      }
+      if (newBgFile && newBgFile.size > BG_UPLOAD_MAX) {
+        showError("Background image must be smaller than 10 MB.");
+        return;
+      }
       var srcNewEl = document.getElementById("edit-src-new");
       var useNewThumb = !!(newThumb && (!srcNewEl || srcNewEl.checked));
       var record = editTarget.record;
@@ -2299,6 +2567,17 @@
       record.title = title;
       record.artist = artist;
       if (useNewThumb) record.thumbBlob = newThumb;
+      var bgSel = bgGroupValue(document.getElementById("edit-bg-choices"), "edit-bg-src");
+      if (bgSel === "") record.bg = null;
+      else if (bgSel === "__upload") {
+        if (newBgFile) record.bg = { kind: "upload", blob: newBgFile };
+        else if (record.bg && record.bg.kind === "upload" && record.bg.blob) {
+          /* keep existing upload */
+        } else {
+          showError("Choose a background image, or pick another option.");
+          return;
+        }
+      } else record.bg = { kind: "preset", id: bgSel };
       if (editTarget.removeLyrics) record.lyrics = null;
       else if (editTarget.editorLines) {
         var built = buildEditorLyrics(editTarget.editorLines);
@@ -2328,6 +2607,8 @@
             }
           }
           track.lyrics = record.lyrics || null;
+          revokeBgUrl(track.bg);
+          track.bg = uploads.memoryBg ? uploads.memoryBg(record.bg) : null;
           renderQueue();
           var cur = currentTrack();
           if (cur === track || (cur && track.uploadId && cur.uploadId === track.uploadId)) {
@@ -2336,6 +2617,7 @@
             albumArt.src = trackThumb(track);
             syncMiniMeta();
             syncLyricsOverlay();
+            applyBackground();
           }
           closeEdit();
           toast("Track updated");
@@ -2536,7 +2818,301 @@
     });
   }
 
+  /* ------------------------------------------------------ mobile nav drawer */
+
+  function bindNav() {
+    var toggle = document.getElementById("nav-toggle");
+    var scrim = document.getElementById("nav-scrim");
+    var timer = null;
+    if (!toggle) return;
+
+    function isOpen() {
+      return document.body.classList.contains("nav-open");
+    }
+
+    function setNav(open) {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (open) {
+        document.body.classList.remove("nav-closing");
+        document.body.classList.add("nav-open");
+        toggle.setAttribute("aria-expanded", "true");
+        setIcon(toggle, "x");
+        if (scrim) scrim.hidden = false;
+      } else {
+        if (!isOpen() && !document.body.classList.contains("nav-closing")) return;
+        document.body.classList.remove("nav-open");
+        document.body.classList.add("nav-closing");
+        toggle.setAttribute("aria-expanded", "false");
+        setIcon(toggle, "menu");
+        timer = setTimeout(function () {
+          document.body.classList.remove("nav-closing");
+          if (scrim) scrim.hidden = true;
+          timer = null;
+        }, 260);
+      }
+    }
+
+    toggle.addEventListener("click", function () {
+      setNav(!isOpen());
+    });
+
+    if (scrim) {
+      scrim.addEventListener("click", function () {
+        setNav(false);
+      });
+    }
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && isOpen()) setNav(false);
+    });
+
+    // opening a modal from the drawer closes the drawer first
+    ["upload-btn", "help-btn"].forEach(function (id) {
+      var btn = document.getElementById(id);
+      if (btn) {
+        btn.addEventListener("click", function () {
+          setNav(false);
+        });
+      }
+    });
+  }
+
   /* ------------------------------------------------------------ help guide */
+
+  /* ---------------------------------------------------------- playlist edit */
+
+  var plTarget = null;
+
+  function refreshPlaylistBgPreview() {
+    if (!plTarget) return;
+    var sel = bgGroupValue(
+      document.getElementById("playlist-bg-choices"),
+      "pl-bg-src"
+    );
+    var fileEl = document.getElementById("playlist-bg-file");
+    if (fileEl) fileEl.hidden = sel !== "__upload";
+    var res = null;
+    if (sel && sel !== "__upload") {
+      res = bgUrlFor({ kind: "preset", id: sel });
+    } else if (sel === "__upload") {
+      if (plTarget.bgURL) res = { media: "image", src: plTarget.bgURL };
+      else if (
+        plTarget.def &&
+        plTarget.def.bg &&
+        plTarget.def.bg.kind === "upload" &&
+        plTarget.playlist.bg &&
+        plTarget.playlist.bg.url
+      ) {
+        res = { media: "image", src: plTarget.playlist.bg.url };
+      }
+    } else {
+      res = {
+        media: "video",
+        src: plTarget.playlist.bgVideo || "videos/wallpaper1.mp4",
+      };
+    }
+    paintBgPreview(
+      {
+        wrap: "playlist-bg-preview-wrap",
+        img: "playlist-bg-preview",
+        vid: "playlist-bg-preview-video",
+      },
+      res
+    );
+  }
+
+  function openPlaylistModal() {
+    var uploads = window.MUSICGO_UPLOADS;
+    var pl = state.playlist;
+    if (!pl || !uploads || !uploads.isLocal() || !playlistModalEl) return;
+    uploads.getPlaylist(pl.id).then(
+      function (def) {
+        plTarget = { playlist: pl, def: def, bgFile: null, bgURL: null };
+        var nameInput = document.getElementById("playlist-name");
+        if (nameInput) nameInput.value = (def && def.label) || pl.label;
+        var sel = pl.bg ? (pl.bg.kind === "preset" ? pl.bg.id : "__upload") : "";
+        buildBgPicker(
+          document.getElementById("playlist-bg-choices"),
+          "pl-bg-src",
+          sel,
+          "Default video"
+        );
+        var fileEl = document.getElementById("playlist-bg-file");
+        if (fileEl) {
+          fileEl.value = "";
+          fileEl.hidden = sel !== "__upload";
+        }
+        refreshPlaylistBgPreview();
+        var errorEl = document.getElementById("playlist-error");
+        if (errorEl) {
+          errorEl.textContent = "";
+          errorEl.hidden = true;
+        }
+        playlistModalEl.hidden = false;
+        window.requestAnimationFrame(function () {
+          playlistModalEl.classList.add("is-open");
+        });
+        window.setTimeout(function () {
+          if (nameInput && !playlistModalEl.hidden) nameInput.focus();
+        }, 60);
+      },
+      function () {
+        toast("Could not open playlist editor");
+      }
+    );
+  }
+
+  function bindPlaylistModal() {
+    var modal = playlistModalEl;
+    var form = document.getElementById("playlist-form");
+    if (!modal || !form) return;
+    var uploads = window.MUSICGO_UPLOADS;
+    var editBtn = document.getElementById("playlist-edit");
+    var bgChoices = document.getElementById("playlist-bg-choices");
+    var bgFile = document.getElementById("playlist-bg-file");
+    var errorEl = document.getElementById("playlist-error");
+    var saveBtn = document.getElementById("playlist-save");
+    var closeBtn = document.getElementById("playlist-close");
+    var cancelBtn = document.getElementById("playlist-cancel");
+
+    if (editBtn) {
+      if (uploads && uploads.isLocal()) editBtn.hidden = false;
+      editBtn.addEventListener("click", function () {
+        openPlaylistModal();
+      });
+    }
+
+    function showError(message) {
+      if (!errorEl) return;
+      errorEl.textContent = message;
+      errorEl.hidden = false;
+    }
+
+    function clearError() {
+      if (!errorEl) return;
+      errorEl.textContent = "";
+      errorEl.hidden = true;
+    }
+
+    function closePlaylist() {
+      modal.classList.remove("is-open");
+      if (plTarget && plTarget.bgURL) {
+        try {
+          window.URL.revokeObjectURL(plTarget.bgURL);
+        } catch (e) {}
+        plTarget.bgURL = null;
+      }
+      plTarget = null;
+      window.setTimeout(function () {
+        modal.hidden = true;
+        clearError();
+      }, 220);
+    }
+
+    if (closeBtn) closeBtn.addEventListener("click", closePlaylist);
+    if (cancelBtn) cancelBtn.addEventListener("click", closePlaylist);
+
+    modal.addEventListener("click", function (e) {
+      if (e.target === modal) closePlaylist();
+    });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !modal.hidden) closePlaylist();
+    });
+
+    if (bgChoices) {
+      bgChoices.addEventListener("change", function () {
+        refreshPlaylistBgPreview();
+      });
+    }
+    if (bgFile) {
+      bgFile.addEventListener("change", function () {
+        if (plTarget && plTarget.bgURL) {
+          try {
+            window.URL.revokeObjectURL(plTarget.bgURL);
+          } catch (e) {}
+          plTarget.bgURL = null;
+        }
+        var f = bgFile.files && bgFile.files[0];
+        if (!f || !plTarget) return;
+        try {
+          plTarget.bgURL = window.URL.createObjectURL(f);
+        } catch (e) {
+          plTarget.bgURL = null;
+        }
+        checkBgUploadRadio(bgChoices, "pl-bg-src");
+        refreshPlaylistBgPreview();
+      });
+    }
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      if (!plTarget || !uploads) return;
+      clearError();
+      var nameInput = document.getElementById("playlist-name");
+      var name = nameInput ? nameInput.value.trim() : "";
+      if (!name) {
+        showError("Enter a playlist name.");
+        return;
+      }
+      var newBgFile = bgFile && bgFile.files ? bgFile.files[0] : null;
+      if (newBgFile && newBgFile.type && newBgFile.type.indexOf("image/") !== 0) {
+        showError("Background must be an image.");
+        return;
+      }
+      if (newBgFile && newBgFile.size > BG_UPLOAD_MAX) {
+        showError("Background image must be smaller than 10 MB.");
+        return;
+      }
+      var sel = bgGroupValue(
+        document.getElementById("playlist-bg-choices"),
+        "pl-bg-src"
+      );
+      var stored = null;
+      if (sel === "") stored = null;
+      else if (sel === "__upload") {
+        if (newBgFile) stored = { kind: "upload", blob: newBgFile };
+        else if (
+          plTarget.def &&
+          plTarget.def.bg &&
+          plTarget.def.bg.kind === "upload" &&
+          plTarget.def.bg.blob
+        ) {
+          stored = plTarget.def.bg;
+        } else {
+          showError("Choose a background image, or pick another option.");
+          return;
+        }
+      } else stored = { kind: "preset", id: sel };
+      var pl = plTarget.playlist;
+      var def = {
+        id: pl.id,
+        label: name,
+        addedAt: (plTarget.def && plTarget.def.addedAt) || Date.now(),
+        bg: stored,
+      };
+      if (saveBtn) saveBtn.disabled = true;
+      uploads.savePlaylist(def).then(
+        function (saved) {
+          if (saveBtn) saveBtn.disabled = false;
+          pl.label = saved.label;
+          revokeBgUrl(pl.bg);
+          pl.bg = uploads.memoryBg ? uploads.memoryBg(saved.bg) : null;
+          renderTabs();
+          applyBackground();
+          closePlaylist();
+          toast("Playlist updated");
+        },
+        function (err) {
+          if (saveBtn) saveBtn.disabled = false;
+          showError("Update failed: " + (err && err.message ? err.message : "storage error"));
+        }
+      );
+    });
+  }
 
   function bindHelp() {
     var helpBtn = document.getElementById("help-btn");
@@ -2607,6 +3183,8 @@
     bindEdit();
     bindLyricsEditor();
     bindHelp();
+    bindNav();
+    bindPlaylistModal();
     applyBgPreference();
 
     /* file:// can never analyse audio (Chrome blocks every route) — say so
