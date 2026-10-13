@@ -174,6 +174,7 @@
   var editModalEl = document.getElementById("edit-modal");
   var lyricsEditorModalEl = document.getElementById("lyrics-editor-modal");
   var playlistModalEl = document.getElementById("playlist-modal");
+  var confirmModalEl = document.getElementById("confirm-modal");
   var minimizeBtn = document.getElementById("minimize-btn");
   var miniBar = document.getElementById("mini-bar");
   var miniThumb = document.getElementById("mini-thumb");
@@ -207,13 +208,109 @@
       (helpModalEl && !helpModalEl.hidden) ||
       (editModalEl && !editModalEl.hidden) ||
       (lyricsEditorModalEl && !lyricsEditorModalEl.hidden) ||
-      (playlistModalEl && !playlistModalEl.hidden)
+      (playlistModalEl && !playlistModalEl.hidden) ||
+      (confirmModalEl && !confirmModalEl.hidden)
     );
   }
 
   /* ---------------------------------------------------------------- toast */
 
   var toastTimer = null;
+
+  /* --------------------------------------- delete system (tombstones) */
+
+  // Built-in content lives in static data files (never modified), so
+  // built-in deletions are runtime tombstones persisted in localStorage.
+  // Stable keys are content-derived, never array positions, so deleting one
+  // item never shifts the keys of the rest:
+  //   playlists: "pl:" + playlist.id        (explicit ids in playlists.js)
+  //   tracks:    "track:" + playlistId + ":" + track.audio (stable file key)
+  var deletedKeys = {};
+
+  function loadTombstones() {
+    deletedKeys = {};
+    var arr = [];
+    try {
+      arr = JSON.parse(storage.get("deleted", "[]")) || [];
+    } catch (e) {
+      arr = [];
+    }
+    if (!Array.isArray(arr)) arr = [];
+    for (var i = 0; i < arr.length; i++) deletedKeys[arr[i]] = true;
+  }
+
+  function saveTombstones() {
+    var arr = [];
+    for (var k in deletedKeys) {
+      if (deletedKeys.hasOwnProperty(k) && deletedKeys[k]) arr.push(k);
+    }
+    storage.set("deleted", JSON.stringify(arr));
+  }
+
+  function addTombstone(key) {
+    if (!deletedKeys[key]) {
+      deletedKeys[key] = true;
+      saveTombstones();
+    }
+  }
+
+  function builtinTrackKey(plId, track) {
+    return "track:" + plId + ":" + (track.audio || track.name + "|" + track.artist);
+  }
+
+  function applyTombstones() {
+    for (var i = PLAYLISTS.length - 1; i >= 0; i--) {
+      var pl = PLAYLISTS[i];
+      if (deletedKeys["pl:" + pl.id]) {
+        PLAYLISTS.splice(i, 1);
+        continue;
+      }
+      if (pl.tracks) {
+        for (var j = pl.tracks.length - 1; j >= 0; j--) {
+          var t = pl.tracks[j];
+          if (!t.uploadId && deletedKeys[builtinTrackKey(pl.id, t)]) pl.tracks.splice(j, 1);
+        }
+      }
+    }
+  }
+
+  function revokeUrl(url) {
+    if (url && url.indexOf("blob:") === 0) {
+      try {
+        window.URL.revokeObjectURL(url);
+      } catch (e) {}
+    }
+  }
+
+  function revokeTrackUrls(track) {
+    if (!track) return;
+    revokeUrl(track.thumb);
+    if (track.bg && track.bg.url) revokeUrl(track.bg.url);
+  }
+
+  function showIdle() {
+    pauseSong();
+    try {
+      audio.removeAttribute("src");
+    } catch (e) {}
+    try {
+      audio.load();
+    } catch (e) {}
+    state.index = 0;
+    trackTitle.textContent = "No track";
+    trackArtist.textContent = "—";
+    trackNumber.textContent = "Track —";
+    trackOf.textContent = "of 0";
+    resetProgress();
+    renderQueue();
+    markQueueActive();
+    syncMiniMeta();
+    syncLyricsOverlay();
+    applyBackground();
+    if (!state.playlist && window.history && window.history.replaceState) {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }
 
   function toast(message) {
     if (!toastEl) return;
@@ -736,6 +833,27 @@
         })(track);
         tail.appendChild(lyricGlyph);
       }
+      var delGlyph = document.createElement("span");
+      delGlyph.className = "q-del";
+      delGlyph.setAttribute("role", "button");
+      delGlyph.setAttribute("tabindex", "0");
+      delGlyph.setAttribute("data-icon", "trash");
+      delGlyph.setAttribute("aria-label", "Delete track");
+      delGlyph.setAttribute("title", "Delete track");
+      (function (t) {
+        function askDelete(e) {
+          if (e) {
+            if (e.stopPropagation) e.stopPropagation();
+            if (e.preventDefault) e.preventDefault();
+          }
+          askDeleteTrack(t);
+        }
+        delGlyph.addEventListener("click", askDelete);
+        delGlyph.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" || e.key === " ") askDelete(e);
+        });
+      })(track);
+      tail.appendChild(delGlyph);
 
       btn.appendChild(idx);
       btn.appendChild(thumb);
@@ -766,6 +884,208 @@
   }
 
   /* ------------------------------------------------------------ playlists */
+
+  /* -------------------------------------------------- delete confirmation */
+
+  var confirmAction = null;
+
+  function openConfirm(opts) {
+    if (!confirmModalEl) return;
+    var titleEl = document.getElementById("confirm-title");
+    var textEl = document.getElementById("confirm-text");
+    var okBtn = document.getElementById("confirm-ok");
+    if (titleEl) titleEl.textContent = opts.title || "Are you sure?";
+    if (textEl) textEl.textContent = opts.body || "";
+    if (okBtn) okBtn.textContent = opts.ok || "Delete";
+    confirmAction = typeof opts.onConfirm === "function" ? opts.onConfirm : null;
+    confirmModalEl.hidden = false;
+    window.requestAnimationFrame(function () {
+      confirmModalEl.classList.add("is-open");
+    });
+    window.setTimeout(function () {
+      var cancel = document.getElementById("confirm-cancel");
+      if (cancel && !confirmModalEl.hidden) cancel.focus();
+    }, 60);
+  }
+
+  function closeConfirm() {
+    if (!confirmModalEl) return;
+    confirmModalEl.classList.remove("is-open");
+    confirmAction = null;
+    window.setTimeout(function () {
+      confirmModalEl.hidden = true;
+    }, 220);
+  }
+
+  function bindConfirm() {
+    var modal = confirmModalEl;
+    if (!modal) return;
+    var okBtn = document.getElementById("confirm-ok");
+    var cancelBtn = document.getElementById("confirm-cancel");
+    var closeBtn = document.getElementById("confirm-close");
+    function cancel() {
+      closeConfirm();
+    }
+    if (okBtn) {
+      okBtn.addEventListener("click", function () {
+        var fn = confirmAction;
+        closeConfirm();
+        if (fn) fn();
+      });
+    }
+    if (cancelBtn) cancelBtn.addEventListener("click", cancel);
+    if (closeBtn) closeBtn.addEventListener("click", cancel);
+    modal.addEventListener("click", function (e) {
+      if (e.target === modal) cancel();
+    });
+    document.addEventListener(
+      "keydown",
+      function (e) {
+        if (e.key === "Escape" && !modal.hidden) {
+          if (e.stopPropagation) e.stopPropagation();
+          cancel();
+        }
+      },
+      true
+    );
+  }
+
+  function askDeleteTrack(t) {
+    var name = (t && t.name) || "This track";
+    if (t && t.uploadId) {
+      openConfirm({
+        title: "Delete track?",
+        body: "\u201C" + name + "\u201D will be permanently removed from this browser.",
+        ok: "Delete",
+        onConfirm: function () {
+          doDeleteTrack(t);
+        },
+      });
+    } else {
+      openConfirm({
+        title: "Delete track?",
+        body: "\u201C" + name + "\u201D will be hidden from the app. The original files stay on disk.",
+        ok: "Delete",
+        onConfirm: function () {
+          doDeleteTrack(t);
+        },
+      });
+    }
+  }
+
+  function doDeleteTrack(track) {
+    var pl = state.playlist;
+    if (!pl) return;
+    var idx = pl.tracks.indexOf(track);
+    if (idx === -1) return;
+    var wasCurrent = idx === state.index;
+    var wasPlaying = !audio.paused;
+    if (wasCurrent) pauseSong();
+    function removeFromMemory() {
+      var at = pl.tracks.indexOf(track);
+      if (at === -1) return;
+      pl.tracks.splice(at, 1);
+      revokeTrackUrls(track);
+      if (wasCurrent) {
+        if (!pl.tracks.length) {
+          state.index = 0;
+          showIdle();
+        } else {
+          state.index = Math.min(at, pl.tracks.length - 1);
+          loadTrack(state.index, { autoplay: wasPlaying });
+          renderQueue();
+        }
+      } else {
+        if (at < state.index) state.index--;
+        renderQueue();
+        markQueueActive();
+      }
+      toast("Track deleted");
+    }
+    var uploads = window.MUSICGO_UPLOADS;
+    if (track.uploadId && uploads) {
+      uploads.deleteRecord(track.uploadId).then(removeFromMemory, function () {
+        toast("Delete failed");
+      });
+    } else {
+      addTombstone(builtinTrackKey(pl.id, track));
+      removeFromMemory();
+    }
+  }
+
+  function askDeletePlaylist(pl) {
+    var label = (pl && pl.label) || "This playlist";
+    var n = pl && pl.tracks ? pl.tracks.length : 0;
+    var count = n === 1 ? "1 track" : n + " tracks";
+    if (pl && pl.uploaded) {
+      openConfirm({
+        title: "Delete playlist?",
+        body:
+          "\u201C" +
+          label +
+          "\u201D and its " +
+          count +
+          " will be permanently removed from this browser.",
+        ok: "Delete",
+        onConfirm: function () {
+          doDeletePlaylist(pl);
+        },
+      });
+    } else {
+      openConfirm({
+        title: "Delete playlist?",
+        body: "\u201C" + label + "\u201D will be hidden from the app. The original files stay on disk.",
+        ok: "Delete",
+        onConfirm: function () {
+          doDeletePlaylist(pl);
+        },
+      });
+    }
+  }
+
+  function doDeletePlaylist(pl) {
+    if (!pl) return;
+    var wasActive = !!state.playlist && state.playlist.id === pl.id;
+    var wasPlaying = !audio.paused;
+    if (wasActive) pauseSong();
+    function removeFromMemory() {
+      var at = PLAYLISTS.indexOf(pl);
+      if (at !== -1) PLAYLISTS.splice(at, 1);
+      for (var i = 0; i < pl.tracks.length; i++) revokeTrackUrls(pl.tracks[i]);
+      renderTabs();
+      if (wasActive) {
+        if (PLAYLISTS.length) {
+          loadPlaylist(PLAYLISTS[0].id, { autoplay: wasPlaying });
+        } else {
+          state.playlist = null;
+          showIdle();
+        }
+      }
+      toast("Playlist deleted");
+    }
+    var uploads = window.MUSICGO_UPLOADS;
+    if (pl.uploaded && uploads) {
+      var ids = [];
+      for (var i = 0; i < pl.tracks.length; i++) {
+        if (pl.tracks[i].uploadId) ids.push(pl.tracks[i].uploadId);
+      }
+      var chain = Promise.resolve(true);
+      ids.forEach(function (id) {
+        chain = chain.then(function () {
+          return uploads.deleteRecord(id);
+        });
+      });
+      chain = chain.then(function () {
+        return uploads.deletePlaylistDef(pl.id);
+      });
+      chain.then(removeFromMemory, function () {
+        toast("Delete failed");
+      });
+    } else {
+      addTombstone("pl:" + pl.id);
+      removeFromMemory();
+    }
+  }
 
   function findPlaylist(id) {
     for (var i = 0; i < PLAYLISTS.length; i++) {
@@ -1911,6 +2231,7 @@
                 label: targetLabel,
                 bgVideo: "videos/wallpaper1.mp4",
                 tracks: [],
+                uploaded: true,
               };
               PLAYLISTS.push(target);
               renderTabs();
@@ -2977,6 +3298,7 @@
     var saveBtn = document.getElementById("playlist-save");
     var closeBtn = document.getElementById("playlist-close");
     var cancelBtn = document.getElementById("playlist-cancel");
+    var deleteBtn = document.getElementById("playlist-delete");
 
     if (editBtn) {
       if (uploads && uploads.isLocal()) editBtn.hidden = false;
@@ -3014,6 +3336,14 @@
 
     if (closeBtn) closeBtn.addEventListener("click", closePlaylist);
     if (cancelBtn) cancelBtn.addEventListener("click", closePlaylist);
+    if (deleteBtn) {
+      deleteBtn.addEventListener("click", function () {
+        if (!plTarget) return;
+        var pl = plTarget.playlist;
+        closePlaylist();
+        askDeletePlaylist(pl);
+      });
+    }
 
     modal.addEventListener("click", function (e) {
       if (e.target === modal) closePlaylist();
@@ -3165,6 +3495,7 @@
   /* ----------------------------------------------------------------- init */
 
   function init() {
+    loadTombstones();
     if (ICONS) ICONS.render(document);
 
     applyTheme(storage.get("theme", "dark"));
@@ -3185,6 +3516,7 @@
     bindHelp();
     bindNav();
     bindPlaylistModal();
+    bindConfirm();
     applyBgPreference();
 
     /* file:// can never analyse audio (Chrome blocks every route) — say so
@@ -3203,6 +3535,7 @@
     }
 
     ready.then(function () {
+      applyTombstones();
       renderTabs();
 
       if (!PLAYLISTS.length) {

@@ -515,10 +515,34 @@
         <p class="form-error" id="playlist-error" hidden></p>
 
         <div class="modal-actions">
+          <button type="button" class="btn btn-danger danger-left" id="playlist-delete">Delete playlist</button>
           <button type="button" class="btn btn-ghost" id="playlist-cancel">Cancel</button>
           <button type="submit" class="btn btn-primary" id="playlist-save">Save</button>
         </div>
       </form>
+    </div>
+
+    <div class="modal-backdrop" id="confirm-modal" hidden>
+      <div class="modal modal-confirm" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+        <div class="modal-head">
+          <h2 class="modal-title" id="confirm-title">Delete?</h2>
+          <button
+            type="button"
+            class="icon-btn"
+            id="confirm-close"
+            data-icon="x"
+            aria-label="Close confirmation"
+            title="Close"
+          ></button>
+        </div>
+
+        <p class="form-note" id="confirm-text"></p>
+
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="confirm-cancel">Cancel</button>
+          <button type="button" class="btn btn-danger" id="confirm-ok">Delete</button>
+        </div>
+      </div>
     </div>
 
     <div class="modal-backdrop" id="lyrics-editor-modal" hidden>

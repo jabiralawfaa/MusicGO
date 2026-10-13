@@ -948,7 +948,8 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .q-edit,
-.q-lyrics {
+.q-lyrics,
+.q-del {
   display: inline-grid;
   place-items: center;
   width: 30px;
@@ -963,19 +964,22 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .q-edit svg,
-.q-lyrics svg {
+.q-lyrics svg,
+.q-del svg {
   width: 14px;
   height: 14px;
 }
 
 .q-edit:hover,
-.q-lyrics:hover {
+.q-lyrics:hover,
+.q-del:hover {
   background: var(--accent-soft);
   color: var(--accent);
 }
 
 .q-edit:focus-visible,
-.q-lyrics:focus-visible {
+.q-lyrics:focus-visible,
+.q-del:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -1172,6 +1176,18 @@ kbd {
   width: min(740px, 100%);
 }
 
+.modal-confirm {
+  width: min(380px, 100%);
+}
+
+#confirm-modal {
+  z-index: 60;
+}
+
+#confirm-text {
+  margin: 0;
+}
+
 .modal-head {
   display: flex;
   align-items: center;
@@ -1316,6 +1332,22 @@ kbd {
 
 .btn-primary:hover {
   filter: brightness(1.08);
+}
+
+.btn-danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn-danger:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--surface-solid);
+}
+
+.danger-left {
+  margin-right: auto;
 }
 
 /* -------------------------------------------------------- keyboard guide */

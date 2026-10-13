@@ -105,7 +105,7 @@
 
         defs.forEach(function (def) {
           if (!byId[def.id]) {
-            var pl = { id: def.id, label: def.label, bgVideo: "videos/wallpaper1.mp4", tracks: [] };
+            var pl = { id: def.id, label: def.label, bgVideo: "videos/wallpaper1.mp4", tracks: [], uploaded: true };
             if (def.bg !== undefined) pl.bg = memoryBg(def.bg);
             playlists.push(pl);
             byId[pl.id] = pl;
@@ -128,6 +128,7 @@
               label: record.title ? "Uploads" : "Uploads",
               bgVideo: "videos/wallpaper1.mp4",
               tracks: [],
+              uploaded: true,
             };
             playlists.push(pl);
             byId[pl.id] = pl;
@@ -803,14 +804,54 @@
     });
   }
 
+  /* Delete one stored track record by id. Resolves true. */
+  function deleteRecord(id) {
+    return openDb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction([TRACKS], "readwrite");
+        tx.objectStore(TRACKS).delete(id);
+        tx.oncomplete = function () {
+          resolve(true);
+        };
+        tx.onerror = function () {
+          reject(tx.error || new Error("delete failed"));
+        };
+        tx.onabort = function () {
+          reject(tx.error || new Error("delete aborted"));
+        };
+      });
+    });
+  }
+
+  /* Delete one stored playlist def by id. Resolves true. */
+  function deletePlaylistDef(id) {
+    return openDb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction([PLISTS], "readwrite");
+        tx.objectStore(PLISTS).delete(id);
+        tx.oncomplete = function () {
+          resolve(true);
+        };
+        tx.onerror = function () {
+          reject(tx.error || new Error("delete failed"));
+        };
+        tx.onabort = function () {
+          reject(tx.error || new Error("delete aborted"));
+        };
+      });
+    });
+  }
+
   global.MUSICGO_UPLOADS = {
     isLocal: isLocal,
     hydrate: hydrate,
     save: save,
     get: getRecord,
     update: updateRecord,
+    deleteRecord: deleteRecord,
     getPlaylist: getPlaylistDef,
     savePlaylist: savePlaylistDef,
+    deletePlaylistDef: deletePlaylistDef,
     memoryBg: memoryBg,
     extractCover: extractCover,
     extractLyrics: extractLyrics,
