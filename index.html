@@ -329,7 +329,116 @@
   </div>
 </div>
 
-<div class="lyrics-overlay" id="lyrics-overlay" hidden aria-hidden="true"><div class="lyrics-lines" id="lyrics-lines"></div></div>
+    <div class="lyrics-overlay" id="lyrics-overlay" hidden aria-hidden="true"><div class="lyrics-lines" id="lyrics-lines"></div></div>
+
+    <button type="button" class="fx-tab" id="fx-toggle" data-icon="chevron" aria-label="Audio effects" aria-expanded="false" title="Audio effects"></button>
+
+    <aside class="fx-panel" id="fx-panel" aria-label="Audio effects" hidden>
+      <div class="fx-head">
+        <span class="fx-title">Audio Effects</span>
+        <span class="fx-head-btns">
+          <button type="button" class="btn btn-ghost fx-toggle" id="fx-enabled" aria-pressed="true">On</button>
+          <button type="button" class="icon-btn" id="fx-close" data-icon="x" aria-label="Close audio effects" title="Close"></button>
+        </span>
+      </div>
+
+      <p class="form-note" id="fx-offline-note" hidden>Live effects need a server connection.</p>
+
+      <section class="fx-sec" aria-label="Presets">
+        <div class="fx-sec-head"><h3>Presets</h3></div>
+        <div class="fx-preset-row">
+          <select id="fx-preset" aria-label="Effect preset"></select>
+          <button type="button" class="btn btn-ghost" id="fx-preset-save" title="Save current settings as a preset">Save</button>
+          <button type="button" class="btn btn-ghost" id="fx-preset-rename" title="Rename selected preset">Rename</button>
+          <button type="button" class="btn btn-ghost" id="fx-preset-delete" title="Delete selected preset">Delete</button>
+          <button type="button" class="btn btn-ghost" id="fx-preset-reset" title="Reset all settings to flat">Reset</button>
+        </div>
+      </section>
+
+      <section class="fx-sec" aria-label="Equalizer">
+        <div class="fx-sec-head">
+          <h3>Equalizer</h3>
+          <button type="button" class="btn btn-ghost fx-toggle" id="fx-eq-enabled" aria-pressed="true">On</button>
+        </div>
+        <p class="form-note fx-hint">−12 dB … +12 dB per band</p>
+        <div class="eq-grid" id="fx-eq-grid"></div>
+      </section>
+
+      <section class="fx-sec" aria-label="Bass boost">
+        <div class="fx-row">
+          <label for="fx-bass">Bass Boost</label>
+          <input type="range" id="fx-bass" min="0" max="100" step="1" value="0" />
+          <span class="fx-val" id="fx-bass-val">0%</span>
+        </div>
+      </section>
+
+      <section class="fx-sec" aria-label="Treble boost">
+        <div class="fx-row">
+          <label for="fx-treble">Treble Boost</label>
+          <input type="range" id="fx-treble" min="0" max="100" step="1" value="0" />
+          <span class="fx-val" id="fx-treble-val">0%</span>
+        </div>
+      </section>
+
+      <section class="fx-sec" aria-label="Reverb">
+        <div class="fx-sec-head">
+          <h3>Reverb</h3>
+          <button type="button" class="btn btn-ghost fx-toggle" id="fx-reverb-enabled" aria-pressed="true">On</button>
+        </div>
+        <div class="fx-row">
+          <label for="fx-rev-size">Size</label>
+          <input type="range" id="fx-rev-size" min="0" max="100" step="1" value="55" />
+          <span class="fx-val" id="fx-rev-size-val">55%</span>
+        </div>
+        <div class="fx-row">
+          <label for="fx-rev-decay">Decay</label>
+          <input type="range" id="fx-rev-decay" min="0.3" max="6" step="0.1" value="1.8" />
+          <span class="fx-val" id="fx-rev-decay-val">1.8s</span>
+        </div>
+        <div class="fx-row">
+          <label for="fx-rev-damp">Damp</label>
+          <input type="range" id="fx-rev-damp" min="500" max="16000" step="100" value="6000" />
+          <span class="fx-val" id="fx-rev-damp-val">6000 Hz</span>
+        </div>
+        <div class="fx-row">
+          <label for="fx-rev-filter">Tone</label>
+          <select id="fx-rev-filter">
+            <option value="lowpass">Lowpass</option>
+            <option value="highpass">Highpass</option>
+          </select>
+          <input type="range" id="fx-rev-filter-freq" min="200" max="16000" step="100" value="8000" aria-label="Tone filter frequency" />
+          <span class="fx-val" id="fx-rev-filter-freq-val">8000 Hz</span>
+        </div>
+        <div class="fx-row">
+          <label for="fx-rev-predelay">Pre-delay</label>
+          <input type="range" id="fx-rev-predelay" min="0" max="250" step="5" value="20" />
+          <span class="fx-val" id="fx-rev-predelay-val">20 ms</span>
+        </div>
+        <div class="fx-row">
+          <label for="fx-rev-mix">Mix</label>
+          <input type="range" id="fx-rev-mix" min="0" max="100" step="1" value="0" />
+          <span class="fx-val" id="fx-rev-mix-val">0%</span>
+        </div>
+      </section>
+    </aside>
+
+    <div class="modal-backdrop" id="fx-name-modal" hidden>
+      <div class="modal modal-confirm" role="dialog" aria-modal="true" aria-labelledby="fx-name-title">
+        <div class="modal-head">
+          <h2 class="modal-title" id="fx-name-title">Save preset</h2>
+          <button type="button" class="icon-btn" id="fx-name-close" data-icon="x" aria-label="Close preset dialog" title="Close"></button>
+        </div>
+        <label class="field">
+          <span class="field-label">Preset name</span>
+          <input type="text" id="fx-preset-name" maxlength="40" />
+        </label>
+        <p class="form-error" id="fx-name-error" hidden></p>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="fx-name-cancel">Cancel</button>
+          <button type="button" class="btn btn-primary" id="fx-name-save">Save</button>
+        </div>
+      </div>
+    </div>
 
     <div class="modal-backdrop" id="upload-modal" hidden>
       <form class="modal" id="upload-form" aria-label="Upload a song">
@@ -654,6 +763,7 @@
     <script src="js/playlists.js"></script>
     <script src="js/icons.js"></script>
     <script src="js/uploads.js"></script>
+    <script src="js/effects.js"></script>
     <script src="js/script.js"></script>
   </body>
 </html>

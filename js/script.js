@@ -1215,6 +1215,11 @@
       var source = audioCtx.createMediaElementSource(audio);
       source.connect(analyser);
       analyser.connect(audioCtx.destination);
+      if (window.MUSICGO_FX) {
+        try {
+          window.MUSICGO_FX.install(audioCtx, source, analyser);
+        } catch (e) {}
+      }
       graphState = "ready";
     } catch (e) {
       analyser = null;
@@ -3492,6 +3497,469 @@
     });
   }
 
+  /* ------------------------------------------------------ audio effects */
+
+  function bindFx() {
+    var FX = window.MUSICGO_FX;
+    var tab = document.getElementById("fx-toggle");
+    var panel = document.getElementById("fx-panel");
+    if (!tab || !panel || !FX) return;
+    var timer = null;
+    var PRESET_STORE = "fxPreset";
+
+    var masterBtn = document.getElementById("fx-enabled");
+    var eqOnBtn = document.getElementById("fx-eq-enabled");
+    var revOnBtn = document.getElementById("fx-reverb-enabled");
+    var closeBtn = document.getElementById("fx-close");
+    var note = document.getElementById("fx-offline-note");
+    var presetSel = document.getElementById("fx-preset");
+    var saveBtn = document.getElementById("fx-preset-save");
+    var renameBtn = document.getElementById("fx-preset-rename");
+    var deleteBtn = document.getElementById("fx-preset-delete");
+    var resetBtn = document.getElementById("fx-preset-reset");
+    var filterSel = document.getElementById("fx-rev-filter");
+
+    var nameModal = document.getElementById("fx-name-modal");
+    var nameTitle = document.getElementById("fx-name-title");
+    var nameInput = document.getElementById("fx-preset-name");
+    var nameError = document.getElementById("fx-name-error");
+    var nameSave = document.getElementById("fx-name-save");
+    var nameCancel = document.getElementById("fx-name-cancel");
+    var nameClose = document.getElementById("fx-name-close");
+    var nameMode = "save";
+
+    function fmtDb(v) {
+      v = Number(v);
+      if (!isFinite(v)) v = 0;
+      return (v > 0 ? "+" : "") + v;
+    }
+    function fmtPct(v) {
+      return Math.round(Number(v)) + "%";
+    }
+    function fmtSec(v) {
+      return Number(v).toFixed(1) + "s";
+    }
+    function fmtHz(v) {
+      return Math.round(Number(v)) + " Hz";
+    }
+    function fmtMs(v) {
+      return Math.round(Number(v)) + " ms";
+    }
+
+    function setToggle(btn, on) {
+      if (!btn) return;
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+      btn.textContent = on ? "On" : "Off";
+    }
+
+    function setRange(id, valId, v, fmt) {
+      var el = document.getElementById(id);
+      var out = document.getElementById(valId);
+      if (el) el.value = String(v);
+      if (out) out.textContent = fmt(v);
+    }
+
+    // build the 10 vertical EQ sliders from the module's band table
+    var eqInputs = [];
+    (function buildEq() {
+      var grid = document.getElementById("fx-eq-grid");
+      if (!grid || typeof FX.bands !== "function") return;
+      var freqs = FX.bands();
+      for (var i = 0; i < freqs.length; i++) {
+        (function (idx) {
+          var f = freqs[idx];
+          var lab = document.createElement("label");
+          lab.className = "eq-band";
+          var db = document.createElement("span");
+          db.className = "eq-db";
+          db.id = "fx-eqdb-" + idx;
+          db.textContent = "0";
+          var input = document.createElement("input");
+          input.type = "range";
+          input.min = "-12";
+          input.max = "12";
+          input.step = "0.5";
+          input.value = "0";
+          input.setAttribute("orient", "vertical");
+          input.setAttribute(
+            "aria-label",
+            (f >= 1000 ? f / 1000 + " kHz" : f + " Hz") + " band"
+          );
+          var fr = document.createElement("span");
+          fr.className = "eq-freq";
+          fr.textContent = f >= 1000 ? f / 1000 + "k" : String(f);
+          input.addEventListener("input", function () {
+            var v = Number(input.value);
+            db.textContent = fmtDb(v);
+            FX.setEqBand(idx, v);
+            updatePresetLabel();
+          });
+          lab.appendChild(db);
+          lab.appendChild(input);
+          lab.appendChild(fr);
+          grid.appendChild(lab);
+          eqInputs.push({ input: input, out: db });
+        })(i);
+      }
+    })();
+
+    function bindRange(id, valId, fmt, apply) {
+      var el = document.getElementById(id);
+      var out = document.getElementById(valId);
+      if (!el) return;
+      el.addEventListener("input", function () {
+        var v = Number(el.value);
+        if (out) out.textContent = fmt(v);
+        apply(v);
+        updatePresetLabel();
+      });
+    }
+
+    bindRange("fx-bass", "fx-bass-val", fmtPct, function (v) {
+      FX.setBass(v);
+    });
+    bindRange("fx-treble", "fx-treble-val", fmtPct, function (v) {
+      FX.setTreble(v);
+    });
+    bindRange("fx-rev-size", "fx-rev-size-val", fmtPct, function (v) {
+      FX.setReverb("size", v);
+    });
+    bindRange("fx-rev-decay", "fx-rev-decay-val", fmtSec, function (v) {
+      FX.setReverb("decay", v);
+    });
+    bindRange("fx-rev-damp", "fx-rev-damp-val", fmtHz, function (v) {
+      FX.setReverb("damp", v);
+    });
+    bindRange("fx-rev-filter-freq", "fx-rev-filter-freq-val", fmtHz, function (v) {
+      FX.setReverb("filterFreq", v);
+    });
+    bindRange("fx-rev-predelay", "fx-rev-predelay-val", fmtMs, function (v) {
+      FX.setReverb("preDelay", v);
+    });
+    bindRange("fx-rev-mix", "fx-rev-mix-val", fmtPct, function (v) {
+      FX.setReverb("mix", v);
+    });
+    if (filterSel) {
+      filterSel.addEventListener("change", function () {
+        FX.setReverb("filterType", filterSel.value);
+        updatePresetLabel();
+      });
+    }
+
+    if (masterBtn) {
+      masterBtn.addEventListener("click", function () {
+        var s = FX.getSettings();
+        FX.setEnabled(!s.enabled);
+        setToggle(masterBtn, !s.enabled);
+        toast(!s.enabled ? "Effects on" : "Effects off");
+      });
+    }
+    if (eqOnBtn) {
+      eqOnBtn.addEventListener("click", function () {
+        var s = FX.getSettings();
+        FX.setEqEnabled(!s.eqEnabled);
+        setToggle(eqOnBtn, !s.eqEnabled);
+      });
+    }
+    if (revOnBtn) {
+      revOnBtn.addEventListener("click", function () {
+        var s = FX.getSettings();
+        FX.setReverbEnabled(!s.reverbEnabled);
+        setToggle(revOnBtn, !s.reverbEnabled);
+      });
+    }
+
+    function selectedPreset() {
+      if (!presetSel) return null;
+      var v = presetSel.value || "";
+      if (v.indexOf("c:") === 0) return { kind: "custom", id: v.slice(2) };
+      if (v.indexOf("b:") === 0) return { kind: "builtin", name: v.slice(2) };
+      return null;
+    }
+
+    function rebuildPresetSelect(keep) {
+      if (!presetSel) return;
+      if (keep === undefined) keep = presetSel.value;
+      presetSel.innerHTML = "";
+      var builtins = FX.builtins();
+      for (var i = 0; i < builtins.length; i++) {
+        var opt = document.createElement("option");
+        opt.value = "b:" + builtins[i];
+        opt.textContent = builtins[i];
+        presetSel.appendChild(opt);
+      }
+      var customs = FX.listCustom();
+      for (var j = 0; j < customs.length; j++) {
+        var copt = document.createElement("option");
+        copt.value = "c:" + customs[j].id;
+        copt.textContent = customs[j].name;
+        presetSel.appendChild(copt);
+      }
+      var found = false;
+      for (var k = 0; k < presetSel.options.length; k++) {
+        if (presetSel.options[k].value === keep) {
+          found = true;
+          break;
+        }
+      }
+      presetSel.value = found ? keep : "b:" + builtins[0];
+      updatePresetLabel();
+      refreshPresetButtons();
+    }
+
+    function refreshPresetButtons() {
+      var sel = selectedPreset();
+      var isCustom = !!sel && sel.kind === "custom";
+      if (renameBtn) renameBtn.disabled = !isCustom;
+      if (deleteBtn) deleteBtn.disabled = !isCustom;
+    }
+
+    // reflect whether the live settings still match the selected preset
+    function updatePresetLabel() {
+      if (!presetSel) return;
+      var opt = presetSel.options[presetSel.selectedIndex];
+      var sel = selectedPreset();
+      if (!opt || !sel) return;
+      var name = sel.kind === "custom" ? customNameOf(sel) : sel.name;
+      var clean = FX.matchesPreset(sel.kind, sel.kind === "custom" ? sel.id : sel.name);
+      opt.textContent = clean ? name : name + " \u2022";
+      opt.title = clean ? "" : "Modified";
+    }
+
+    function refreshFxUI(keepPreset) {
+      var s = FX.getSettings();
+      setToggle(masterBtn, s.enabled);
+      setToggle(eqOnBtn, s.eqEnabled);
+      setToggle(revOnBtn, s.reverbEnabled);
+      for (var i = 0; i < eqInputs.length && i < s.eq.length; i++) {
+        eqInputs[i].input.value = String(s.eq[i]);
+        eqInputs[i].out.textContent = fmtDb(s.eq[i]);
+      }
+      setRange("fx-bass", "fx-bass-val", s.bass, fmtPct);
+      setRange("fx-treble", "fx-treble-val", s.treble, fmtPct);
+      setRange("fx-rev-size", "fx-rev-size-val", s.reverb.size, fmtPct);
+      setRange("fx-rev-decay", "fx-rev-decay-val", s.reverb.decay, fmtSec);
+      setRange("fx-rev-damp", "fx-rev-damp-val", s.reverb.damp, fmtHz);
+      if (filterSel) filterSel.value = s.reverb.filterType;
+      setRange("fx-rev-filter-freq", "fx-rev-filter-freq-val", s.reverb.filterFreq, fmtHz);
+      setRange("fx-rev-predelay", "fx-rev-predelay-val", s.reverb.preDelay, fmtMs);
+      setRange("fx-rev-mix", "fx-rev-mix-val", s.reverb.mix, fmtPct);
+      rebuildPresetSelect(keepPreset);
+    }
+
+    if (presetSel) {
+      presetSel.addEventListener("change", function () {
+        var sel = selectedPreset();
+        if (!sel) return;
+        var ok = sel.kind === "custom" ? FX.applyCustom(sel.id) : FX.applyPreset(sel.name);
+        if (ok) {
+          storage.set(PRESET_STORE, presetSel.value);
+          refreshFxUI(presetSel.value);
+          toast((sel.kind === "custom" ? "Custom: " : "Preset: ") + sel.name);
+        }
+        refreshPresetButtons();
+      });
+    }
+
+    function closeNameModal() {
+      if (!nameModal) return;
+      nameModal.classList.remove("is-open");
+      window.setTimeout(function () {
+        nameModal.hidden = true;
+      }, 220);
+    }
+
+    function openNameModal(mode, initial) {
+      if (!nameModal) return;
+      nameMode = mode;
+      if (nameTitle) nameTitle.textContent = mode === "rename" ? "Rename preset" : "Save preset";
+      if (nameInput) nameInput.value = initial || "";
+      if (nameError) {
+        nameError.textContent = "";
+        nameError.hidden = true;
+      }
+      nameModal.hidden = false;
+      window.requestAnimationFrame(function () {
+        nameModal.classList.add("is-open");
+      });
+      window.setTimeout(function () {
+        if (nameInput && !nameModal.hidden) nameInput.focus();
+      }, 60);
+    }
+
+    function customNameOf(sel) {
+      if (!sel || sel.kind !== "custom") return "";
+      var list = FX.listCustom();
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === sel.id) return list[i].name;
+      }
+      return "";
+    }
+
+    if (saveBtn) {
+      saveBtn.addEventListener("click", function () {
+        openNameModal("save", "");
+      });
+    }
+    if (renameBtn) {
+      renameBtn.addEventListener("click", function () {
+        var sel = selectedPreset();
+        if (!sel || sel.kind !== "custom") return;
+        openNameModal("rename", customNameOf(sel));
+      });
+    }
+    if (deleteBtn) {
+      deleteBtn.addEventListener("click", function () {
+        var sel = selectedPreset();
+        if (!sel || sel.kind !== "custom") return;
+        var label = customNameOf(sel);
+        openConfirm({
+          title: "Delete preset?",
+          body: "\u201C" + label + "\u201D will be removed from this browser.",
+          ok: "Delete",
+          onConfirm: function () {
+            FX.deleteCustom(sel.id);
+            // keep the sound; the selection falls back to Flat with the modified marker
+            storage.set(PRESET_STORE, "");
+            refreshFxUI("");
+            toast("Preset deleted");
+          },
+        });
+      });
+    }
+    if (resetBtn) {
+      resetBtn.addEventListener("click", function () {
+        FX.resetDefaults();
+        storage.set(PRESET_STORE, "b:Flat");
+        refreshFxUI("b:Flat");
+        toast("Effects reset");
+      });
+    }
+
+    function submitNameModal() {
+      var name = nameInput ? nameInput.value.trim() : "";
+      if (!name) {
+        if (nameError) {
+          nameError.textContent = "Enter a preset name.";
+          nameError.hidden = false;
+        }
+        return;
+      }
+      if (nameMode === "rename") {
+        var sel = selectedPreset();
+        if (!sel || sel.kind !== "custom" || !FX.renameCustom(sel.id, name)) {
+          if (nameError) {
+            nameError.textContent = "Could not rename preset.";
+            nameError.hidden = false;
+          }
+          return;
+        }
+        rebuildPresetSelect("c:" + sel.id);
+        toast("Preset renamed");
+      } else {
+        var entry = FX.saveCustom(name);
+        if (!entry) {
+          if (nameError) {
+            nameError.textContent = "Could not save preset.";
+            nameError.hidden = false;
+          }
+          return;
+        }
+        rebuildPresetSelect("c:" + entry.id);
+        storage.set(PRESET_STORE, "c:" + entry.id);
+        toast("Preset saved");
+      }
+      closeNameModal();
+    }
+
+    if (nameSave) {
+      nameSave.addEventListener("click", submitNameModal);
+    }
+    if (nameInput) {
+      nameInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          submitNameModal();
+        }
+      });
+    }
+    if (nameCancel) {
+      nameCancel.addEventListener("click", closeNameModal);
+    }
+    if (nameClose) {
+      nameClose.addEventListener("click", closeNameModal);
+    }
+    if (nameModal) {
+      nameModal.addEventListener("click", function (e) {
+        if (e.target === nameModal) closeNameModal();
+      });
+    }
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && nameModal && !nameModal.hidden) {
+        if (e.stopPropagation) e.stopPropagation();
+        closeNameModal();
+      }
+    });
+
+    function isFxOpen() {
+      return body.classList.contains("fx-open");
+    }
+
+    function setFx(open) {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (open) {
+        body.classList.remove("fx-closing");
+        body.classList.add("fx-open");
+        tab.setAttribute("aria-expanded", "true");
+        setIcon(tab, "x");
+        if (panel.hidden) panel.hidden = false;
+      } else {
+        if (!isFxOpen() && !body.classList.contains("fx-closing")) return;
+        body.classList.remove("fx-open");
+        body.classList.add("fx-closing");
+        tab.setAttribute("aria-expanded", "false");
+        setIcon(tab, "chevron");
+        timer = setTimeout(function () {
+          body.classList.remove("fx-closing");
+          panel.hidden = true;
+          timer = null;
+        }, 260);
+      }
+    }
+
+    tab.addEventListener("click", function () {
+      if (!isFxOpen()) refreshFxUI();
+      setFx(!isFxOpen());
+    });
+
+    if (closeBtn) {
+      closeBtn.addEventListener("click", function () {
+        setFx(false);
+      });
+    }
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && isFxOpen()) {
+        if (nameModal && !nameModal.hidden) return;
+        setFx(false);
+      }
+    });
+
+    // file:// never builds a graph: keep the panel readable but inert
+    if (location.protocol !== "http:" && location.protocol !== "https:") {
+      if (note) note.hidden = false;
+      var ctrls = panel.querySelectorAll("input, select, button");
+      for (var i = 0; i < ctrls.length; i++) {
+        if (ctrls[i].id !== "fx-close") ctrls[i].disabled = true;
+      }
+    }
+
+    refreshFxUI(storage.get(PRESET_STORE, "b:Flat"));
+  }
+
   /* ----------------------------------------------------------------- init */
 
   function init() {
@@ -3517,6 +3985,7 @@
     bindNav();
     bindPlaylistModal();
     bindConfirm();
+    bindFx();
     applyBgPreference();
 
     /* file:// can never analyse audio (Chrome blocks every route) — say so
