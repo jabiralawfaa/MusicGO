@@ -658,30 +658,91 @@
       <form class="modal modal-lyrics" id="lyrics-editor-form" aria-label="Edit lyrics">
         <div class="modal-head">
           <h2 class="modal-title">Edit lyrics</h2>
-          <button
-            type="button"
-            class="icon-btn"
-            id="lyrics-editor-close"
-            data-icon="x"
-            aria-label="Close lyrics editor"
-            title="Close"
-          ></button>
+          <span class="modal-head-btns">
+            <button
+              type="button"
+              class="icon-btn"
+              id="lyrics-editor-undo"
+              data-icon="undo"
+              aria-label="Undo"
+              title="Undo (Ctrl+Z)"
+              disabled
+            ></button>
+            <button
+              type="button"
+              class="icon-btn"
+              id="lyrics-editor-redo"
+              data-icon="redo"
+              aria-label="Redo"
+              title="Redo (Ctrl+Shift+Z)"
+              disabled
+            ></button>
+            <button
+              type="button"
+              class="icon-btn"
+              id="lyrics-editor-close"
+              data-icon="x"
+              aria-label="Close lyrics editor"
+              title="Close"
+            ></button>
+          </span>
         </div>
 
         <p class="field-hint" id="lyrics-editor-meta">—</p>
 
+        <div class="lyx-bar">
+          <button
+            type="button"
+            class="icon-btn lyx-play"
+            id="lyx-play"
+            data-icon="play"
+            aria-label="Play"
+            title="Play / pause (Space)"
+          ></button>
+          <span class="lyx-time" id="lyx-time">0:00 / –:––</span>
+          <input type="range" id="lyx-seek" min="0" max="1000" value="0" step="1" aria-label="Seek" />
+          <button
+            type="button"
+            class="btn btn-primary lyx-sync"
+            id="lyx-sync"
+            disabled
+            title="Stamp current time into the highlighted line or word (Enter)"
+          >
+            Sync <span id="lyx-sync-stamp">00:00.00</span>
+          </button>
+        </div>
+
+        <div class="lyx-source">
+          <label class="field-label" for="lyrics-source">Paste lyrics (.lrc / plain text)</label>
+          <textarea id="lyrics-source" class="lyx-source-text" rows="4" placeholder="Paste .lrc or plain text here…"></textarea>
+          <input type="file" id="lyrics-source-file" accept=".lrc,.txt" />
+          <button type="button" class="btn btn-ghost" id="lyrics-source-load">Load</button>
+          <p class="field-hint" id="lyrics-source-note" hidden></p>
+        </div>
+
+        <div id="lyx-mode" class="lyx-bar">
+          <input type="radio" name="lyx-mode" id="lyx-mode-simple" checked>
+          <label for="lyx-mode-simple">Simple LRC</label>
+          <input type="radio" name="lyx-mode" id="lyx-mode-enhanced">
+          <label for="lyx-mode-enhanced">Enhanced LRC</label>
+        </div>
+
         <div id="lyrics-editor" hidden>
           <div class="lyric-rows" id="lyric-rows"></div>
           <button type="button" class="btn btn-ghost" id="lyrics-add-line">+ Add line</button>
+          <p class="field-hint">
+            Tip: Space = play/pause, Enter = stamp the highlighted line (Simple) or word (Enhanced) and advance. Click any line to aim at it.
+          </p>
         </div>
 
-        <p class="field-hint" id="lyrics-editor-hint" hidden>No timed lines to edit — attach a timed .lrc file.</p>
+        <p class="field-hint" id="lyrics-editor-hint" hidden>No lyrics yet — paste lyrics above or attach a .lrc file.</p>
 
         <p class="field-hint" id="lyrics-words-preview" hidden></p>
 
         <p class="form-error" id="lyrics-editor-error" hidden></p>
 
         <div class="modal-actions">
+          <button type="button" class="btn btn-ghost" id="lyrics-editor-export" title="Download these lyrics as a .lrc file">Export .lrc</button>
           <button type="button" class="btn btn-ghost" id="lyrics-editor-cancel">Cancel</button>
           <button type="submit" class="btn btn-primary" id="lyrics-editor-save">Save lyrics</button>
         </div>

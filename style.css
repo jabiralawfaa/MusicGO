@@ -1303,6 +1303,10 @@ kbd {
   margin-top: 18px;
 }
 
+#lyrics-editor-export {
+  margin-right: auto;
+}
+
 .btn {
   padding: 10px 18px;
   border-radius: 999px;
@@ -1847,6 +1851,254 @@ body.is-minimized .app {
 .ly-del svg {
   width: 13px;
   height: 13px;
+}
+
+.lyric-row-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* content stays aligned with other rows (−10 margin + 8 pad + 2 border = 0);
+     the left bar only lights up on the current sync target */
+  margin-left: -10px;
+  padding-left: 8px;
+  border-left: 2px solid transparent;
+  border-radius: 6px;
+  transition: border-color 0.15s ease;
+}
+
+.lyric-row-wrap.is-sync-target {
+  border-left-color: var(--accent);
+}
+
+.ly-stamp {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+}
+
+.ly-stamp svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ly-words-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+.ly-words-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  margin-left: 96px;
+}
+
+/* Simple LRC hides word-level UI */
+#lyrics-editor[data-mode="simple"] .ly-words-btn { display: none; }
+#lyrics-editor[data-mode="simple"] .ly-words-panel { display: none; }
+
+/* Word-level sync target accent */
+.lw-row.is-sync-target {
+  border-left-color: var(--accent);
+}
+
+/* Mode toggle segmented control */
+#lyx-mode {
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  margin-top: 2px;
+}
+#lyx-mode input[type="radio"] {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+#lyx-mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  cursor: pointer;
+  user-select: none;
+}
+#lyx-mode label:hover { border-color: var(--accent); }
+#lyx-mode input[type="radio"]:checked + label {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-fg, var(--fg));
+}
+#lyx-mode input[type="radio"]:focus-visible + label {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+#lyx-mode input[type="radio"]:not(:checked) + label { opacity: 0.7; }
+
+@media (max-width: 768px) {
+  #lyx-mode { flex-wrap: wrap; justify-content: flex-start; }
+}
+
+.lw-time {
+  flex: 0 0 80px;
+  width: 80px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lw-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.lw-row.is-invalid .lw-time {
+  border-color: var(--danger);
+}
+
+.lw-del {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.lw-del svg {
+  width: 12px;
+  height: 12px;
+}
+
+.modal-head-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.modal-head-btns .icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.modal-head-btns .icon-btn:disabled:hover {
+  color: var(--fg-muted);
+  background: transparent;
+}
+
+/* ------------------------------------------- lyrics editor transport/sync */
+
+.lyx-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin: 4px 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.lyx-play {
+  flex-shrink: 0;
+}
+
+.lyx-time {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted, var(--fg-muted));
+  white-space: nowrap;
+}
+
+#lyx-seek {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lyx-sync {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+#lyx-sync-stamp {
+  opacity: 0.85;
+}
+
+.lyx-sync:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.lyx-source {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 10px;
+  margin: 4px 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.lyx-source-text {
+  flex: 1 1 260px;
+  min-width: 260px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+@media (max-width: 768px) {
+  .lyric-row .ly-time {
+    flex-basis: 76px;
+    width: 76px;
+  }
+
+  .ly-words-panel {
+    margin-left: 0;
+  }
+
+  .lyx-bar {
+    flex-wrap: wrap;
+  }
+
+  #lyx-seek {
+    order: 5;
+    flex: 1 1 100%;
+  }
+
+  .lyx-time {
+    font-size: 12px;
+  }
 }
 
 .cover-choices {

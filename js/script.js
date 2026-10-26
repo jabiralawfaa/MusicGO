@@ -1704,8 +1704,91 @@
     if (miniSeek) miniSeek.setAttribute("aria-valuenow", String(Math.round(pct)));
   }
 
+  /* ------------------------------------------------- external identity sync
+     title + Media Session metadata + JSON-LD for OS media overlay,
+     browser media hub and crawlers. Runs every frame but bails out
+     immediately unless name/artist/artwork/lyrics actually changed. */
+
+  var DEFAULT_TITLE = "MusicGO — Local Audio Player";
+  var lastIdentitySig = null;
+
+  function syncPlaybackIdentity() {
+    var track = currentTrack();
+    var name = track && track.name ? String(track.name) : "";
+    var artist = track && track.artist ? String(track.artist) : "";
+    var art = track ? trackThumb(track) : "";
+    var lyrics = "";
+    if (track && track.lyrics && track.lyrics.lines) {
+      var lines = track.lyrics.lines;
+      var parts = [];
+      for (var i = 0; i < lines.length; i++) {
+        parts.push(lines[i] && lines[i].text ? lines[i].text : "");
+      }
+      lyrics = parts.join("\n");
+    }
+
+    var sig = JSON.stringify([name, artist, art, lyrics]);
+    if (sig === lastIdentitySig) return;
+    lastIdentitySig = sig;
+
+    document.title = name ? (artist ? name + " — " + artist : name) : DEFAULT_TITLE;
+
+    try {
+      if ("mediaSession" in navigator && typeof MediaMetadata !== "undefined") {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: name,
+          artist: artist,
+          artwork: art ? [{ src: art, sizes: "512x512" }] : [],
+        });
+      }
+    } catch (e) {
+      /* media session unavailable — playback must not break */
+    }
+
+    try {
+      var el = document.getElementById("ld-music");
+      if (!name) {
+        if (el) el.textContent = "";
+      } else {
+        var payload = {
+          "@context": "https://schema.org",
+          "@type": "MusicRecording",
+          name: name,
+          byArtist: { "@type": "MusicGroup", name: artist },
+        };
+        if (lyrics) payload.lyrics = lyrics;
+        if (!el) {
+          el = document.createElement("script");
+          el.type = "application/ld+json";
+          el.id = "ld-music";
+          (document.head || document.documentElement).appendChild(el);
+        }
+        el.textContent = JSON.stringify(payload);
+      }
+    } catch (e2) {
+      /* structured data is best-effort */
+    }
+  }
+
+  function updateMediaPositionState() {
+    try {
+      if (!("mediaSession" in navigator) || !("setPositionState" in navigator.mediaSession)) return;
+      var d = audio.duration;
+      var p = audio.currentTime;
+      var r = audio.playbackRate;
+      if (!isFinite(d) || d <= 0) return;
+      if (!isFinite(p) || p < 0 || p > d) return;
+      if (!isFinite(r) || r <= 0) return;
+      navigator.mediaSession.setPositionState({ duration: d, playbackRate: r, position: p });
+    } catch (e) {
+      /* older/buggy implementations — ignore */
+    }
+  }
+
   function frame(now) {
     window.requestAnimationFrame(frame);
+
+    syncPlaybackIdentity();
 
     var time = now / 1000;
     var duration = audio.duration;
@@ -1734,6 +1817,8 @@
     if (lyricsOverlay && !lyricsOverlay.hidden) updateLyricActive(false);
 
     if (lyricsOverlay && !lyricsOverlay.hidden) updateLyricSweep();
+
+    if (lyricsEditorModalEl && !lyricsEditorModalEl.hidden) updateLyxTransport();
 
     drawVisualizer(time);
   }
@@ -1809,6 +1894,41 @@
       toast(state.bgOff ? "Background video off" : "Background video on");
     });
 
+    /* external media controls — registered once; each action guarded so an
+       unsupported action name can never throw */
+    if ("mediaSession" in navigator) {
+      var setMsAction = function (action, handler) {
+        try {
+          navigator.mediaSession.setActionHandler(action, handler);
+        } catch (e) {
+          /* action not supported in this browser */
+        }
+      };
+      setMsAction("play", function () {
+        if (audio.paused) togglePlay();
+      });
+      setMsAction("pause", function () {
+        if (!audio.paused) togglePlay();
+      });
+      setMsAction("stop", function () {
+        if (!audio.paused) audio.pause();
+      });
+      setMsAction("previoustrack", function () {
+        prevTrack();
+      });
+      setMsAction("nexttrack", function () {
+        nextTrack(true);
+      });
+      setMsAction("seekto", function (details) {
+        if (!details || !isFinite(details.seekTime)) return;
+        if (!isFinite(audio.duration) || audio.duration <= 0) return;
+        var t = details.seekTime;
+        if (t < 0) t = 0;
+        if (t > audio.duration) t = audio.duration;
+        audio.currentTime = t;
+      });
+    }
+
     audio.addEventListener("play", function () {
       body.classList.add("is-playing");
       albumStage.classList.add("playing");
@@ -1820,6 +1940,7 @@
       }
       npBadge.classList.remove("is-hidden");
       resumeGraph();
+      updateMediaPositionState();
     });
 
     audio.addEventListener("pause", function () {
@@ -1832,9 +1953,12 @@
         miniPlay.setAttribute("aria-label", "Play");
       }
       npBadge.classList.add("is-hidden");
+      updateMediaPositionState();
     });
 
     audio.addEventListener("ended", onEnded);
+
+    audio.addEventListener("seeked", updateMediaPositionState);
 
     audio.addEventListener("error", function () {
       if (!audio.currentSrc) return;
@@ -2265,9 +2389,20 @@
   /* -------------------------------------------------------------- track edit */
 
   var editTarget = null;
+  /* entry object the Sync button will stamp next (reference, not index —
+     the row list re-sorts by time, indexes shift under us) */
+  var lyxTargetEntry = null;
+  var lyxSeekDrag = false;
+  var lyxLastPaused = null;
+  /* mode: false = Simple LRC (line stamps), true = Enhanced LRC (word stamps) */
+  var lyxEnhanced = false;
+  /* word the Sync button will stamp next inside lyxTargetEntry (null = line-level) */
+  var lyxWordEntry = null;
 
   function lyricsStateLabel(lyric) {
     if (!lyric || !lyric.lines || !lyric.lines.length) return "No lyrics";
+    if (lyric.draft)
+      return "Draft (" + lyric.lines.length + " lines, " + lyric.untimed + " untimed)";
     return (lyric.synced ? "Synced" : "Static") + " lyrics (" + lyric.lines.length + " lines)";
   }
 
@@ -2277,14 +2412,20 @@
       ? null
       : editTarget.pendingLyrics || editTarget.record.lyrics || null;
     if (editTarget.editorLines) {
+      var untimed = 0;
+      for (var q = 0; q < editTarget.editorLines.length; q++) {
+        if (editTarget.editorLines[q].t === null || editTarget.editorLines[q].t === undefined)
+          untimed++;
+      }
       lyric = editTarget.editorLines.length
-        ? { synced: true, lines: editTarget.editorLines }
+        ? { synced: true, draft: untimed > 0, untimed: untimed, lines: editTarget.editorLines }
         : null;
     }
     var stateEl = document.getElementById("edit-lyrics-state");
     if (stateEl) stateEl.textContent = lyricsStateLabel(lyric);
     var removeBtn = document.getElementById("edit-lyrics-remove");
     if (removeBtn) removeBtn.hidden = !lyric;
+    refreshSyncTarget();
   }
 
   function formatLyricTime(ms) {
@@ -2315,7 +2456,10 @@
       var entry = {
         t: lines[i].t,
         text: lines[i].text,
-        raw: formatLyricTime(lines[i].t),
+        raw:
+          lines[i].t === null || lines[i].t === undefined
+            ? ""
+            : formatLyricTime(lines[i].t),
         origText: lines[i].text,
       };
       if (lines[i].words) {
@@ -2399,7 +2543,7 @@
     var list = document.getElementById("lyric-rows");
     if (!list) return;
     for (var i = 0; i < list.children.length; i++) {
-      var row = list.children[i];
+      var row = list.children[i].querySelector(".lyric-row") || list.children[i];
       var time = row.querySelector(".ly-time");
       var text = row.querySelector(".ly-text");
       var del = row.querySelector(".ly-del");
@@ -2409,9 +2553,155 @@
     }
   }
 
+  /* --------------------------------------------- lyrics editor undo/redo */
+  var undoStack = [];
+  var redoStack = [];
+  var textSnapTaken = false;
+
+  function refreshUndoBtns() {
+    var u = document.getElementById("lyrics-editor-undo");
+    var r = document.getElementById("lyrics-editor-redo");
+    if (u) u.disabled = !undoStack.length;
+    if (r) r.disabled = !redoStack.length;
+  }
+
+  function snapshotUndo() {
+    if (!editTarget || !editTarget.editorLines) return;
+    undoStack.push(JSON.stringify(editTarget.editorLines));
+    if (undoStack.length > 50) undoStack.shift();
+    redoStack.length = 0;
+    refreshUndoBtns();
+  }
+
+  function restoreLyricLines(json) {
+    editTarget.editorLines = JSON.parse(json);
+    lyxWordEntry = null; // restored lines are fresh objects; re-aim on refresh
+    textSnapTaken = false;
+    renderLyricEditor();
+    refreshEditLyricsState();
+    updateLyricWordsPreview();
+    refreshUndoBtns();
+  }
+
+  function undoLyrics() {
+    if (!undoStack.length || !editTarget) return;
+    redoStack.push(JSON.stringify(editTarget.editorLines));
+    restoreLyricLines(undoStack.pop());
+  }
+
+  function redoLyrics() {
+    if (!redoStack.length || !editTarget) return;
+    undoStack.push(JSON.stringify(editTarget.editorLines));
+    restoreLyricLines(redoStack.pop());
+  }
+
+  function resetLyricUndo() {
+    undoStack.length = 0;
+    redoStack.length = 0;
+    textSnapTaken = false;
+    refreshUndoBtns();
+  }
+
+  /* Snapshot text edits once per focus session: the first keystroke in a
+     field pushes one undo entry; blur ("change") rearms the snapshot. */
+  function armTextSnapshot() {
+    if (textSnapTaken) return;
+    snapshotUndo();
+    textSnapTaken = true;
+  }
+
+  function disarmTextSnapshot() {
+    textSnapTaken = false;
+  }
+
+  function buildLyricWordsPanel(wrapper, entry) {
+    var panel = wrapper.querySelector(".ly-words-panel");
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.className = "ly-words-panel";
+      panel.hidden = true;
+      wrapper.appendChild(panel);
+    }
+    panel.textContent = "";
+    var words = entry.words || [];
+    function rebuild() {
+      buildLyricWordsPanel(wrapper, entry);
+      updateLyricWordsPreview();
+    }
+    for (var i = 0; i < words.length; i++) {
+      (function (wi) {
+        var w = words[wi];
+        var rowEl = document.createElement("div");
+        rowEl.className = "lw-row";
+        rowEl._lyricWord = w;
+        var wt = document.createElement("input");
+        wt.type = "text";
+        wt.className = "lw-time";
+        wt.value = formatLyricTime(w.t);
+        wt.setAttribute("aria-label", "Word " + (wi + 1) + " time");
+        wt.setAttribute("maxlength", "12");
+        wt.addEventListener("change", function () {
+          var ms = parseLyricTime(wt.value);
+          snapshotUndo();
+          w.t = ms;
+          if (ms === null) {
+            rowEl.classList.add("is-invalid");
+            return;
+          }
+          rowEl.classList.remove("is-invalid");
+          words.sort(function (a, b) {
+            return a.t - b.t;
+          });
+          rebuild();
+        });
+        var wtext = document.createElement("input");
+        wtext.type = "text";
+        wtext.className = "lw-text";
+        wtext.value = w.text;
+        wtext.setAttribute("aria-label", "Word " + (wi + 1) + " text");
+        wtext.addEventListener("input", function () {
+          armTextSnapshot();
+          w.text = wtext.value;
+          updateLyricWordsPreview();
+        });
+        wtext.addEventListener("change", disarmTextSnapshot);
+        var wdel = document.createElement("button");
+        wdel.type = "button";
+        wdel.className = "icon-btn lw-del";
+        wdel.setAttribute("aria-label", "Delete word " + (wi + 1));
+        wdel.setAttribute("title", "Delete word");
+        setIcon(wdel, "x");
+        wdel.addEventListener("click", function () {
+          snapshotUndo();
+          words.splice(wi, 1);
+          if (!words.length) {
+            delete entry.words;
+            var btn = wrapper.querySelector(".ly-words-btn");
+            if (btn && btn.parentNode) btn.parentNode.removeChild(btn);
+            if (panel.parentNode) panel.parentNode.removeChild(panel);
+          } else {
+            rebuild();
+          }
+          updateLyricWordsPreview();
+        });
+        rowEl.appendChild(wt);
+        rowEl.appendChild(wtext);
+        rowEl.appendChild(wdel);
+        panel.appendChild(rowEl);
+      })(i);
+    }
+    return panel;
+  }
+
   function buildLyricRow(entry, n) {
+    // invalid only when a time was TYPED but is unparseable; an empty
+    // time on a draft line stays neutral until save
     var invalid =
-      (entry.t === null || entry.t === undefined) && !!String(entry.text).trim();
+      (entry.t === null || entry.t === undefined) &&
+      String(entry.raw !== undefined && entry.raw !== null ? entry.raw : "").trim() !== "";
+    var wrapper = document.createElement("div");
+    wrapper.className = "lyric-row-wrap";
+    wrapper._lyricEntry = entry;
     var row = document.createElement("div");
     row.className = "lyric-row" + (invalid ? " is-invalid" : "");
     row._lyricEntry = entry;
@@ -2421,12 +2711,15 @@
     time.value =
       entry.raw !== undefined && entry.raw !== null
         ? entry.raw
-        : formatLyricTime(entry.t);
+        : entry.t === null || entry.t === undefined
+          ? ""
+          : formatLyricTime(entry.t);
     time.setAttribute("aria-label", "Line " + (n + 1) + " time");
     time.setAttribute("maxlength", "12");
     time.setAttribute("placeholder", "00:00.00");
     time.addEventListener("change", function () {
       var ms = parseLyricTime(time.value);
+      snapshotUndo();
       entry.t = ms;
       entry.raw = time.value;
       if (ms === null) {
@@ -2442,8 +2735,60 @@
     text.value = entry.text;
     text.setAttribute("aria-label", "Line " + (n + 1) + " lyric");
     text.addEventListener("input", function () {
+      armTextSnapshot();
       entry.text = text.value;
+      if (entry.words && text.value !== entry.origText) {
+        delete entry.words;
+        var wbtn = wrapper.querySelector(".ly-words-btn");
+        if (wbtn && wbtn.parentNode) wbtn.parentNode.removeChild(wbtn);
+        var wpanel = wrapper.querySelector(".ly-words-panel");
+        if (wpanel && wpanel.parentNode) wpanel.parentNode.removeChild(wpanel);
+        toast("Word timings cleared — line text changed");
+        updateLyricWordsPreview();
+      }
     });
+    text.addEventListener("change", disarmTextSnapshot);
+    if (entry.words && entry.words.length) {
+      var wbtnEl = document.createElement("button");
+      wbtnEl.type = "button";
+      wbtnEl.className = "btn btn-ghost ly-words-btn";
+      wbtnEl.textContent =
+        entry.words.length + (entry.words.length === 1 ? " word" : " words");
+      wbtnEl.setAttribute("aria-expanded", "false");
+      wbtnEl.addEventListener("click", function () {
+        var open = wrapper.dataset.wordsOpen === "1";
+        var panel = wrapper.querySelector(".ly-words-panel");
+        if (open) {
+          if (panel) panel.hidden = true;
+          wrapper.dataset.wordsOpen = "0";
+          wbtnEl.setAttribute("aria-expanded", "false");
+        } else {
+          buildLyricWordsPanel(wrapper, entry);
+          panel = wrapper.querySelector(".ly-words-panel");
+          if (panel) panel.hidden = false;
+          wrapper.dataset.wordsOpen = "1";
+          wbtnEl.setAttribute("aria-expanded", "true");
+        }
+      });
+      row.appendChild(wbtnEl);
+    }
+    var stamp = document.createElement("button");
+    stamp.type = "button";
+    stamp.className = "icon-btn ly-stamp";
+    stamp.setAttribute("aria-label", "Stamp current time into line " + (n + 1));
+    stamp.setAttribute("title", "Stamp current playback time");
+    setIcon(stamp, "clock");
+    stamp.addEventListener("click", function () {
+      snapshotUndo();
+      var ms = Math.round((audio && audio.currentTime ? audio.currentTime : 0) * 1000);
+      entry.t = ms;
+      entry.raw = formatLyricTime(ms);
+      time.value = entry.raw;
+      row.classList.remove("is-invalid");
+      resortLyricEditor();
+      refreshEditLyricsState();
+    });
+    row.appendChild(stamp);
     var del = document.createElement("button");
     del.type = "button";
     del.className = "icon-btn ly-del";
@@ -2452,24 +2797,30 @@
     setIcon(del, "x");
     del.addEventListener("click", function () {
       if (!editTarget || !editTarget.editorLines) return;
+      snapshotUndo();
       var live = editTarget.editorLines;
       var at = live.indexOf(entry);
       if (at !== -1) live.splice(at, 1);
-      if (row.parentNode) row.parentNode.removeChild(row);
+      if (wrapper.parentNode) wrapper.parentNode.removeChild(wrapper);
       renumberLyricRows();
       refreshEditLyricsState();
+      updateLyricWordsPreview();
     });
     row.appendChild(time);
     row.appendChild(text);
     row.appendChild(del);
-    return row;
+    wrapper.appendChild(row);
+    return wrapper;
   }
 
   function renderLyricEditor() {
     var box = document.getElementById("lyrics-editor");
     var list = document.getElementById("lyric-rows");
     var hint = document.getElementById("lyrics-editor-hint");
+    var exportBtn = document.getElementById("lyrics-editor-export");
     if (!box || !list) return;
+    if (exportBtn)
+      exportBtn.disabled = !(editTarget && editTarget.editorLines && editTarget.editorLines.length);
     if (!editTarget || !editTarget.editorLines) {
       box.hidden = true;
       list.textContent = "";
@@ -2483,6 +2834,297 @@
       list.appendChild(buildLyricRow(rows[i], i));
     }
     if (hint) hint.hidden = rows.length > 0;
+    refreshSyncTarget();
+  }
+
+  /* ------------------------------------------- lyrics editor transport/sync */
+
+  function lyxRows() {
+    return editTarget && editTarget.editorLines ? editTarget.editorLines : [];
+  }
+
+  /* Split a line into word entries (the Enhanced LRC walk units). Returns
+     true when words were created; lines that already have words stay as-is. */
+  function splitEntryWords(entry) {
+    if (!entry || (entry.words && entry.words.length)) return false;
+    var chunks = String(entry.text || "").trim().split(/\s+/);
+    var built = [];
+    for (var c = 0; c < chunks.length; c++) {
+      if (chunks[c])
+        built.push({
+          // isFinite(null) is true — treat untimed lines as 00:00.00
+          t: entry.t === null || entry.t === undefined || !isFinite(entry.t) ? 0 : entry.t,
+          text: chunks[c],
+        });
+    }
+    if (!built.length) return false;
+    entry.words = built;
+    return true;
+  }
+
+  function anyWordlessLine() {
+    var rows = lyxRows();
+    for (var i = 0; i < rows.length; i++) {
+      if (String(rows[i].text || "").trim() && (!rows[i].words || !rows[i].words.length))
+        return true;
+    }
+    return false;
+  }
+
+  /* Enhanced must show its words at once: split every line, rebuild rows so
+     each gets its .ly-words-btn close toggle, then open every word panel. */
+  function expandEnhancedWords() {
+    var changed = false;
+    var rows = lyxRows();
+    for (var i = 0; i < rows.length; i++) {
+      if (splitEntryWords(rows[i])) changed = true;
+    }
+    if (changed) renderLyricEditor();
+    var list = document.getElementById("lyric-rows");
+    if (!list) return;
+    for (var k = 0; k < list.children.length; k++) {
+      var wrapEl = list.children[k];
+      var entry = wrapEl._lyricEntry;
+      if (!entry || !entry.words || !entry.words.length) continue;
+      var panel = wrapEl.querySelector(".ly-words-panel");
+      if (!panel) panel = buildLyricWordsPanel(wrapEl, entry);
+      if (panel) panel.hidden = false;
+      wrapEl.dataset.wordsOpen = "1";
+      var wbtn = wrapEl.querySelector(".ly-words-btn");
+      if (wbtn) wbtn.setAttribute("aria-expanded", "true");
+    }
+  }
+
+  /* Push the Simple/Enhanced mode into the DOM: data-mode drives CSS
+     (.ly-words-btn/.ly-words-panel hide in simple), radios mirror state,
+     the word aim is cleared, then words expand (enhanced) + aim/preview repaint. */
+  function applyLyricsMode() {
+    var box = document.getElementById("lyrics-editor");
+    if (box) box.setAttribute("data-mode", lyxEnhanced ? "enhanced" : "simple");
+    var rs = document.getElementById("lyx-mode-simple");
+    var re = document.getElementById("lyx-mode-enhanced");
+    if (rs) rs.checked = !lyxEnhanced;
+    if (re) re.checked = !!lyxEnhanced;
+    lyxWordEntry = null;
+    if (lyxEnhanced) expandEnhancedWords();
+    refreshSyncTarget();
+    updateLyricWordsPreview();
+  }
+
+  /* Validate the sync aim (the row the big Sync button stamps next), paint
+     the accent bar on it, and enable/disable the button. Aim changes come
+     from focusin, doSync advancing, or validation fallback — never from
+     simply re-rendering, so advancing survives re-renders. */
+  function refreshSyncTarget() {
+    var list = document.getElementById("lyric-rows");
+    var btn = document.getElementById("lyx-sync");
+    var rows = lyxRows();
+    if (!rows.length) {
+      lyxTargetEntry = null;
+      if (btn) btn.disabled = true;
+      return;
+    }
+    if (!lyxTargetEntry || rows.indexOf(lyxTargetEntry) === -1) {
+      lyxTargetEntry = null;
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].t === null || rows[i].t === undefined) {
+          lyxTargetEntry = rows[i];
+          break;
+        }
+      }
+      if (!lyxTargetEntry) lyxTargetEntry = rows[0];
+    }
+    /* the word aim is only valid while it belongs to the aimed line */
+    if (lyxWordEntry) {
+      var aimWords = lyxTargetEntry && lyxTargetEntry.words;
+      if (!aimWords || aimWords.indexOf(lyxWordEntry) === -1) lyxWordEntry = null;
+    }
+    if (btn) btn.disabled = false;
+    if (!list) return;
+    for (var k = 0; k < list.children.length; k++) {
+      var on = list.children[k]._lyricEntry === lyxTargetEntry;
+      if (on) list.children[k].classList.add("is-sync-target");
+      else list.children[k].classList.remove("is-sync-target");
+    }
+    /* word rows only exist once a line's word panel has been built */
+    var wrows = list.querySelectorAll(".lw-row");
+    for (var wr = 0; wr < wrows.length; wr++) {
+      var won = !!(lyxEnhanced && lyxWordEntry && wrows[wr]._lyricWord === lyxWordEntry);
+      if (won) wrows[wr].classList.add("is-sync-target");
+      else wrows[wr].classList.remove("is-sync-target");
+    }
+  }
+
+  /* Tap-to-sync: stamp the playhead into the aimed line, then advance the
+     aim to the next line so repeated taps walk down the lyrics. */
+  function doSync() {
+    if (!editTarget || !editTarget.editorLines || !editTarget.editorLines.length) {
+      toast("Add a lyric line first");
+      return;
+    }
+    var rows = editTarget.editorLines;
+    refreshSyncTarget();
+    var entry = lyxTargetEntry;
+    if (!entry) return;
+    var idx = rows.indexOf(entry);
+    var next = idx >= 0 && idx + 1 < rows.length ? rows[idx + 1] : null;
+    var prevWord = lyxWordEntry; // non-null = the walk is mid-line already
+    snapshotUndo();
+    var cur = audio && isFinite(audio.currentTime) ? audio.currentTime : 0;
+    var ms = Math.round(cur * 1000);
+    var list = document.getElementById("lyric-rows");
+    var targetEl = null;
+    if (list) {
+      for (var ti = 0; ti < list.children.length; ti++) {
+        if (list.children[ti]._lyricEntry === entry) {
+          targetEl = list.children[ti];
+          break;
+        }
+      }
+    }
+
+    /* -------- Simple LRC: stamp the line, advance a whole line ---------- */
+    if (!lyxEnhanced) {
+      entry.t = ms;
+      entry.raw = formatLyricTime(ms);
+      if (targetEl) {
+        var time = targetEl.querySelector(".ly-time");
+        if (time) time.value = entry.raw;
+        var row = targetEl.querySelector(".lyric-row");
+        if (row) row.classList.remove("is-invalid");
+      }
+      lyxTargetEntry = next || entry;
+      // no resort here: plain-text rows all start at t=0, stamping one line and
+      // re-sorting would shuffle the tap order — output sorts at save time
+      refreshEditLyricsState();
+      // keep the new target visible and focused while tapping along: focus must
+      // leave the text field so Space/Enter keep driving the transport
+      if (list && lyxTargetEntry) {
+        for (var j = 0; j < list.children.length; j++) {
+          if (list.children[j]._lyricEntry === lyxTargetEntry) {
+            try {
+              list.children[j].scrollIntoView({ block: "nearest" });
+            } catch (e) {}
+            var nextTime = list.children[j].querySelector(".ly-time");
+            if (nextTime) nextTime.focus();
+            break;
+          }
+        }
+      }
+      return;
+    }
+
+    /* -------- Enhanced LRC: stamp word by word -------------------------- */
+    // fallback for lines added/edited after Enhanced was chosen
+    var made = splitEntryWords(entry);
+    // rows rendered before this line had words lack the .ly-words-btn toggle —
+    // rebuild this row so the auto-opened panel stays closeable
+    if (made && targetEl && targetEl.parentNode) {
+      var freshRow = buildLyricRow(entry, idx >= 0 ? idx : 0);
+      if (freshRow) {
+        targetEl.parentNode.replaceChild(freshRow, targetEl);
+        targetEl = freshRow;
+      }
+    }
+    var stampLine = false;
+    if (entry.words && entry.words.length) {
+      var w =
+        prevWord && entry.words.indexOf(prevWord) !== -1 ? prevWord : entry.words[0];
+      w.t = ms;
+      stampLine = w === entry.words[0]; // first word also stamps its line
+      var wi = entry.words.indexOf(w);
+      var nw = wi >= 0 && wi + 1 < entry.words.length ? entry.words[wi + 1] : null;
+      if (nw) {
+        lyxTargetEntry = entry;
+        lyxWordEntry = nw;
+      } else {
+        // line finished: walk on — next line's words are created lazily on
+        // their first stamp, never pre-created here
+        lyxTargetEntry = next || entry;
+        lyxWordEntry = null;
+      }
+    } else {
+      // nothing to walk (empty text): behave like the simple path
+      stampLine = true;
+      lyxTargetEntry = next || entry;
+      lyxWordEntry = null;
+    }
+    if (stampLine) {
+      entry.t = ms;
+      entry.raw = formatLyricTime(ms);
+      if (targetEl) {
+        var ltime = targetEl.querySelector(".ly-time");
+        if (ltime) ltime.value = entry.raw;
+        var lrow = targetEl.querySelector(".lyric-row");
+        if (lrow) lrow.classList.remove("is-invalid");
+      }
+    }
+    // Show the walk: open this line's word panel when the aim just arrived
+    // here (prevWord null) or when its words were built this tap.
+    if (made || !prevWord) {
+      var wbtn = targetEl && targetEl.querySelector(".ly-words-btn");
+      var wpanel = targetEl && targetEl.querySelector(".ly-words-panel");
+      if (targetEl && !wpanel) wpanel = buildLyricWordsPanel(targetEl, entry);
+      if (wpanel) wpanel.hidden = false;
+      if (targetEl) targetEl.dataset.wordsOpen = "1";
+      if (wbtn) wbtn.setAttribute("aria-expanded", "true");
+    }
+    refreshEditLyricsState();
+    // keep the stamp point visible and focused: the next word of this line,
+    // else the next line's time field (focusin re-aims from there)
+    if (list && lyxWordEntry) {
+      for (var p = 0; p < list.children.length; p++) {
+        if (list.children[p]._lyricEntry !== entry) continue;
+        var lwr = list.children[p].querySelectorAll(".lw-row");
+        for (var q = 0; q < lwr.length; q++) {
+          if (lwr[q]._lyricWord === lyxWordEntry) {
+            try {
+              lwr[q].scrollIntoView({ block: "nearest" });
+            } catch (ew) {}
+            var wtime = lwr[q].querySelector(".lw-time");
+            if (wtime) wtime.focus();
+            break;
+          }
+        }
+        break;
+      }
+    } else if (list && lyxTargetEntry) {
+      for (var n2 = 0; n2 < list.children.length; n2++) {
+        if (list.children[n2]._lyricEntry === lyxTargetEntry) {
+          try {
+            list.children[n2].scrollIntoView({ block: "nearest" });
+          } catch (en) {}
+          var ntime = list.children[n2].querySelector(".ly-time");
+          if (ntime) ntime.focus();
+          break;
+        }
+      }
+    }
+  }
+
+  /* Live transport state — called from frame() while the editor is open. */
+  function updateLyxTransport() {
+    var timeEl = document.getElementById("lyx-time");
+    var seekEl = document.getElementById("lyx-seek");
+    var playEl = document.getElementById("lyx-play");
+    var stampEl = document.getElementById("lyx-sync-stamp");
+    var cur = isFinite(audio.currentTime) ? audio.currentTime : 0;
+    var dur = isFinite(audio.duration) ? audio.duration : 0;
+    if (timeEl)
+      timeEl.textContent =
+        formatTime(cur) + " / " + (isFinite(dur) && dur > 0 ? formatTime(dur) : "–:––");
+    if (seekEl && !lyxSeekDrag) {
+      var ratio = dur > 0 ? cur / dur : 0;
+      var v = String(Math.round(ratio * 1000));
+      if (seekEl.value !== v) seekEl.value = v;
+      seekEl.style.setProperty("--val", ratio * 100 + "%");
+    }
+    if (stampEl) stampEl.textContent = formatLyricTime(Math.round(cur * 1000));
+    if (playEl && lyxLastPaused !== audio.paused) {
+      lyxLastPaused = audio.paused;
+      setIcon(playEl, audio.paused ? "play" : "pause");
+      playEl.setAttribute("aria-label", audio.paused ? "Play" : "Pause");
+    }
   }
 
   /* ----------------------------------------------- background picker (shared) */
@@ -2836,6 +3478,7 @@
     if (addLineBtn) {
       addLineBtn.addEventListener("click", function () {
         if (!editTarget || !editTarget.editorLines) return;
+        snapshotUndo();
         var rows = editTarget.editorLines;
         var nt = 0;
         if (rows.length) {
@@ -2974,7 +3617,8 @@
         }
       }
     }
-    if (!count) {
+    if (!count || !lyxEnhanced) {
+      // simple mode never previews word timings, even when lines carry them
       el.hidden = true;
       el.textContent = "";
       return;
@@ -2986,6 +3630,19 @@
       " · " +
       stamps.join(", ") +
       (count > stamps.length ? ", …" : "");
+  }
+
+  /* Status line for the source block (#lyrics-source-note): pass null/empty
+     to hide it. Shared by open + load so the wording stays in one place. */
+  function setSourceNote(msg) {
+    var note = document.getElementById("lyrics-source-note");
+    if (!note) return;
+    if (!msg) {
+      note.hidden = true;
+      return;
+    }
+    note.textContent = msg;
+    note.hidden = false;
   }
 
   function openLyricsEditor(track, fromEdit) {
@@ -3008,7 +3665,31 @@
       var src = editTarget.removeLyrics
         ? null
         : editTarget.pendingLyrics || record.lyrics;
-      editTarget.editorLines = src && src.synced ? cloneLyricLines(src.lines) : [];
+      // load synced lines AND static (untimed) lines as an editable draft
+      editTarget.editorLines = src && src.lines ? cloneLyricLines(src.lines) : [];
+      // auto-detect mode: any line carrying word timings → Enhanced LRC
+      lyxEnhanced = false;
+      for (var qm = 0; qm < editTarget.editorLines.length; qm++) {
+        var qmw = editTarget.editorLines[qm].words;
+        if (qmw && qmw.length) {
+          lyxEnhanced = true;
+          break;
+        }
+      }
+      resetLyricUndo();
+      lyxTargetEntry = null;
+      lyxWordEntry = null;
+      lyxSeekDrag = false;
+      lyxLastPaused = null;
+      // the editor transport plays THIS track — load it (no autoplay) when
+      // the player is on a different song, so tapping Sync matches the rows
+      var list = tracks();
+      for (var qi = 0; qi < list.length; qi++) {
+        if (list[qi] === t || (t.uploadId && list[qi].uploadId === t.uploadId)) {
+          if (qi !== state.index) loadTrack(qi, {});
+          break;
+        }
+      }
       editTarget.lyricsReturnEdit = !!fromEdit && !!editModalEl && !editModalEl.hidden;
       if (editTarget.lyricsReturnEdit) {
         editModalEl.classList.remove("is-open");
@@ -3016,7 +3697,7 @@
       }
       refreshEditLyricsState();
       renderLyricEditor();
-      updateLyricWordsPreview();
+      applyLyricsMode(); // data-mode + radios + aim/word-preview repaint
       var errorEl = document.getElementById("lyrics-editor-error");
       if (errorEl) {
         errorEl.textContent = "";
@@ -3024,14 +3705,31 @@
       }
       var meta = document.getElementById("lyrics-editor-meta");
       if (meta) meta.textContent = t.name + " · " + t.artist;
+      setSourceNote(
+        editTarget.editorLines && editTarget.editorLines.length
+          ? "Existing lyrics: " +
+              editTarget.editorLines.length +
+              " lines — adjust timing below or re-import above"
+          : null
+      );
       lyricsEditorModalEl.hidden = false;
       window.requestAnimationFrame(function () {
         lyricsEditorModalEl.classList.add("is-open");
       });
       window.setTimeout(function () {
         if (lyricsEditorModalEl.hidden) return;
-        var first = document.querySelector("#lyric-rows .ly-time");
+        // move focus OFF the queue glyph into the modal — otherwise Space
+        // stays captured by the glyph (Space = activate) and never reaches
+        // the transport
+        var noRows = !editTarget || !editTarget.editorLines || !editTarget.editorLines.length;
+        var first =
+          (noRows && document.getElementById("lyrics-source")) ||
+          document.querySelector("#lyric-rows .ly-time");
         if (first) first.focus();
+        else {
+          var playBtn = document.getElementById("lyx-play");
+          if (playBtn) playBtn.focus();
+        }
       }, 60);
     }
     if (editTarget && editTarget.track === track && editTarget.record) {
@@ -3077,6 +3775,218 @@
     var saveBtn = document.getElementById("lyrics-editor-save");
     var closeBtn = document.getElementById("lyrics-editor-close");
     var cancelBtn = document.getElementById("lyrics-editor-cancel");
+    var undoBtn = document.getElementById("lyrics-editor-undo");
+    var redoBtn = document.getElementById("lyrics-editor-redo");
+    var exportBtn = document.getElementById("lyrics-editor-export");
+
+    if (undoBtn)
+      undoBtn.addEventListener("click", function () {
+        undoLyrics();
+      });
+    if (redoBtn)
+      redoBtn.addEventListener("click", function () {
+        redoLyrics();
+      });
+
+    /* source block: one field takes .lrc OR plain text → editor rows */
+    var sourceEl = document.getElementById("lyrics-source");
+    var sourceFile = document.getElementById("lyrics-source-file");
+    var sourceLoad = document.getElementById("lyrics-source-load");
+
+    function parseLyricsSource() {
+      if (!sourceEl || !editTarget) return;
+      var raw = sourceEl.value || "";
+      var parsed = null;
+      try {
+        if (uploads && uploads.parseLrc) parsed = uploads.parseLrc(raw);
+      } catch (e) {
+        parsed = null;
+      }
+      var lines = null;
+      var note = "";
+      if (parsed && parsed.lines && parsed.lines.length) {
+        lines = cloneLyricLines(parsed.lines);
+        note = "LRC detected — " + parsed.lines.length + " timed lines";
+      } else {
+        // plain text: every line starts untimed at 00:00.00, tap Sync to stamp
+        var parts = raw.split(/\r?\n/);
+        lines = [];
+        for (var i = 0; i < parts.length && lines.length < 800; i++) {
+          var line = parts[i].trim();
+          if (!line) continue;
+          lines.push({ t: 0, raw: formatLyricTime(0), text: line, origText: line });
+        }
+        if (!lines.length) {
+          showError("Paste lyrics or choose a .lrc file");
+          return; // nothing to load — leave the current rows untouched
+        }
+        note =
+          "Plain text — " +
+          lines.length +
+          " lines, all set to 00:00.00 — press Enter to sync each line";
+      }
+      snapshotUndo(); // before replacing: undo must bring the old lines back
+      editTarget.editorLines = lines;
+      lyxTargetEntry = null;
+      lyxWordEntry = null;
+      // auto-detect mode from the loaded source: word stamps → Enhanced,
+      // plain LRC/text → Simple
+      lyxEnhanced = false;
+      for (var lm = 0; lm < lines.length; lm++) {
+        if (lines[lm].words && lines[lm].words.length) {
+          lyxEnhanced = true;
+          break;
+        }
+      }
+      renderLyricEditor();
+      refreshEditLyricsState();
+      applyLyricsMode(); // data-mode + radios + aim/word-preview repaint
+      clearError();
+      setSourceNote(note);
+      var firstTime = document.querySelector("#lyric-rows .ly-time");
+      if (firstTime) firstTime.focus();
+    }
+
+    if (sourceLoad)
+      sourceLoad.addEventListener("click", function (e) {
+        if (e && e.preventDefault) e.preventDefault(); // never submit the form
+        parseLyricsSource();
+      });
+
+    if (sourceFile)
+      sourceFile.addEventListener("change", function () {
+        var f = sourceFile.files && sourceFile.files[0];
+        if (!f) return;
+        try {
+          var reader = new FileReader();
+          reader.onload = function () {
+            if (sourceEl) sourceEl.value = String(reader.result || "");
+            parseLyricsSource();
+            sourceFile.value = ""; // re-pick the same file must fire change
+          };
+          reader.onerror = function () {
+            sourceFile.value = "";
+          };
+          reader.readAsText(f);
+        } catch (e2) {}
+      });
+
+    /* mode toggle: Simple LRC (line stamps) ↔ Enhanced LRC (word stamps) */
+    var modeSimple = document.getElementById("lyx-mode-simple");
+    var modeEnhanced = document.getElementById("lyx-mode-enhanced");
+    function onLyxModeChange() {
+      var goingEnhanced = !!(modeEnhanced && modeEnhanced.checked);
+      // one undo entry reverts the bulk auto-split when leaving Enhanced soon
+      if (goingEnhanced && !lyxEnhanced && anyWordlessLine()) snapshotUndo();
+      lyxEnhanced = goingEnhanced;
+      applyLyricsMode();
+    }
+    if (modeSimple) modeSimple.addEventListener("change", onLyxModeChange);
+    if (modeEnhanced) modeEnhanced.addEventListener("change", onLyxModeChange);
+
+    /* in-modal transport: play/pause, seek, tap-to-sync */
+    var lyxPlay = document.getElementById("lyx-play");
+    var lyxSeek = document.getElementById("lyx-seek");
+    var lyxSync = document.getElementById("lyx-sync");
+    var lyricRowsEl = document.getElementById("lyric-rows");
+
+    if (lyxPlay)
+      lyxPlay.addEventListener("click", function () {
+        togglePlay();
+      });
+
+    if (lyxSeek) {
+      lyxSeek.addEventListener("pointerdown", function () {
+        lyxSeekDrag = true;
+      });
+      lyxSeek.addEventListener("pointerup", function () {
+        lyxSeekDrag = false;
+      });
+      lyxSeek.addEventListener("pointercancel", function () {
+        lyxSeekDrag = false;
+      });
+      lyxSeek.addEventListener("input", function () {
+        var dur = isFinite(audio.duration) ? audio.duration : 0;
+        if (!dur) return;
+        var ratio = Number(lyxSeek.value) / 1000;
+        lyxSeek.style.setProperty("--val", ratio * 100 + "%");
+        audio.currentTime = ratio * dur;
+      });
+    }
+
+    if (lyxSync) lyxSync.addEventListener("click", doSync);
+
+    /* clicking/focusing a row aims the Sync button at it; focusing inside a
+       word panel row also aims the walk at that word */
+    if (lyricRowsEl)
+      lyricRowsEl.addEventListener("focusin", function (e) {
+        var t = e.target;
+        if (!t || !t.closest) return;
+        var wrap = t.closest(".lyric-row-wrap");
+        if (!wrap || !wrap._lyricEntry) return;
+        lyxTargetEntry = wrap._lyricEntry;
+        var lwRow = t.closest(".lw-row");
+        var wref = lwRow && lwRow._lyricWord;
+        lyxWordEntry =
+          wref && wrap._lyricEntry.words && wrap._lyricEntry.words.indexOf(wref) !== -1
+            ? wref
+            : null;
+        refreshSyncTarget();
+      });
+
+    if (exportBtn) {
+      exportBtn.addEventListener("click", function () {
+        if (!editTarget || !editTarget.track || !editTarget.editorLines) return;
+        var rows = [];
+        for (var i = 0; i < editTarget.editorLines.length; i++) {
+          var en = editTarget.editorLines[i];
+          if (en.t === null || en.t === undefined || !isFinite(en.t)) continue;
+          if (!String(en.text || "").trim()) continue;
+          rows.push(en);
+        }
+        if (!rows.length) {
+          toast("Nothing to export yet");
+          return;
+        }
+        rows.sort(function (a, b) {
+          return a.t - b.t;
+        });
+        var track = editTarget.track;
+        var out = "[ti: " + track.name + "]\n[ar: " + track.artist + "]\n";
+        for (var j = 0; j < rows.length; j++) {
+          var line = rows[j];
+          out += "[" + formatLyricTime(line.t) + "]";
+          if (line.words && line.words.length) {
+            for (var w = 0; w < line.words.length; w++) {
+              out += "<" + formatLyricTime(line.words[w].t) + ">" + line.words[w].text;
+              if (w < line.words.length - 1) out += " ";
+            }
+          } else {
+            out += line.text;
+          }
+          out += "\n";
+        }
+        try {
+          var blob = new Blob([out], { type: "text/plain;charset=utf-8" });
+          var url = window.URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url;
+          a.download =
+            (track.name + " - " + track.artist).replace(/[\\/:*?"<>|]/g, "_").slice(0, 120) +
+            ".lrc";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          window.setTimeout(function () {
+            try {
+              window.URL.revokeObjectURL(url);
+            } catch (e2) {}
+          }, 1000);
+        } catch (e) {
+          toast("Export failed");
+        }
+      });
+    }
 
     function showError(message) {
       if (!errorEl) return;
@@ -3104,7 +4014,58 @@
     });
 
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && !modal.hidden) closeLyricsEditor(false);
+      if (modal.hidden) return;
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === "z" && !e.shiftKey) {
+          e.preventDefault();
+          undoLyrics();
+          return;
+        }
+        if (e.key === "y" || (e.key === "z" && e.shiftKey)) {
+          e.preventDefault();
+          redoLyrics();
+          return;
+        }
+      }
+      if (e.key === "Escape") {
+        closeLyricsEditor(false);
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      var kt = e.target;
+      var tag = kt && kt.tagName;
+      var cls = kt && kt.classList;
+      // time fields (line + word) never contain spaces: Space there drives
+      // the transport instead of typing
+      var isLyTime = tag === "INPUT" && kt.type === "text" && cls && cls.contains("ly-time");
+      var isWordTime = tag === "INPUT" && kt.type === "text" && cls && cls.contains("lw-time");
+      var isTimeField = isLyTime || isWordTime;
+      var onButton = kt && kt.closest && kt.closest("button");
+      if (e.key === " " || e.code === "Space") {
+        // only real text entry swallows Space (ly-text, dialogs, …)
+        var textish =
+          tag === "TEXTAREA" ||
+          tag === "SELECT" ||
+          (kt && kt.isContentEditable) ||
+          (tag === "INPUT" &&
+            !isTimeField &&
+            kt.type !== "range" &&
+            kt.type !== "checkbox" &&
+            kt.type !== "radio" &&
+            kt.type !== "button" &&
+            kt.type !== "submit");
+        if (textish || onButton) return; // type it / native button activation
+        e.preventDefault();
+        togglePlay();
+        return;
+      }
+      if (e.key === "Enter") {
+        // Enter = sync for every field (ly-time/ly-text, word rows, ranges…),
+        // except free-typing targets that need newlines and native buttons
+        if (tag === "TEXTAREA" || (kt && kt.isContentEditable) || onButton) return;
+        e.preventDefault();
+        doSync();
+      }
     });
 
     form.addEventListener("submit", function (e) {
@@ -3114,7 +4075,21 @@
       var built = buildEditorLyrics(editTarget.editorLines || []);
       if (built === false) {
         renderLyricEditor();
-        showError("Time format: mm:ss.xx");
+        var listU = document.getElementById("lyric-rows");
+        if (listU) {
+          for (var ri = 0; ri < listU.children.length; ri++) {
+            var we = listU.children[ri]._lyricEntry;
+            if (
+              we &&
+              (we.t === null || we.t === undefined) &&
+              String(we.text || "").trim()
+            ) {
+              var rr = listU.children[ri].querySelector(".lyric-row");
+              if (rr) rr.classList.add("is-invalid");
+            }
+          }
+        }
+        showError("Every line needs a valid time (mm:ss.xx)");
         return;
       }
       var record = editTarget.record;
